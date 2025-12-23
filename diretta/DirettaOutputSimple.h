@@ -16,8 +16,8 @@
 
 #include <cstdint>
 #include <string>
-#include <DIRETTA/Sync.h>
-#include <ACQUA/Clock.h>
+#include <DIRETTA/Sync.hpp>
+#include <ACQUA/Clock.hpp>
 
 /**
  * @brief Audio format descriptor
