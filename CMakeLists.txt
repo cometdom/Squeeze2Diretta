@@ -121,8 +121,14 @@ if(DEFINED ENV{DIRETTA_SDK_PATH})
     set(SDK_PATH $ENV{DIRETTA_SDK_PATH})
     message(STATUS "✓ Using SDK from environment: ${SDK_PATH}")
 else()
-    # Search in common locations
+    # Search in common locations (SDK 148 preferred, then 147)
     set(SDK_SEARCH_PATHS
+        "$ENV{HOME}/DirettaHostSDK_148"
+        "${CMAKE_SOURCE_DIR}/DirettaHostSDK_148"
+        "${CMAKE_SOURCE_DIR}/../DirettaHostSDK_148"
+        "/opt/DirettaHostSDK_148"
+        "$ENV{HOME}/audio/DirettaHostSDK_148"
+        "/usr/local/DirettaHostSDK_148"
         "$ENV{HOME}/DirettaHostSDK_147"
         "${CMAKE_SOURCE_DIR}/DirettaHostSDK_147"
         "${CMAKE_SOURCE_DIR}/../DirettaHostSDK_147"
@@ -216,7 +222,14 @@ if(NOT EXISTS "${SDK_LIB_ACQUA}")
     message(WARNING "⚠️  ACQUA library not found: ${ACQUA_LIB_NAME}")
 endif()
 
-if(NOT EXISTS "${SDK_PATH}/Host/Diretta/SyncBuffer")
+# Check for SDK headers (SDK 148 uses different path than 147)
+if(EXISTS "${SDK_PATH}/Host/Sync.hpp")
+    message(STATUS "✓ SDK 148 headers detected")
+    set(SDK_VERSION "148")
+elseif(EXISTS "${SDK_PATH}/Host/Diretta/SyncBuffer")
+    message(STATUS "✓ SDK 147 headers detected")
+    set(SDK_VERSION "147")
+else()
     message(FATAL_ERROR "❌ SDK headers not found at: ${SDK_PATH}/Host/")
 endif()
 
@@ -255,7 +268,8 @@ link_directories(
 
 set(WRAPPER_SOURCES
     squeeze2diretta-wrapper.cpp
-    diretta/DirettaOutputSimple.cpp
+    diretta/DirettaSync.cpp
+    diretta/globals.cpp
 )
 
 # ============================================
@@ -286,8 +300,28 @@ endif()
 # Compiler Flags
 # ============================================
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -O2")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Architecture-specific SIMD flags for DirettaSync optimizations
+if(BASE_ARCH STREQUAL "x64")
+    if(IS_ZEN4_RESULT EQUAL 0)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=znver4 -mtune=znver4")
+        message(STATUS "SIMD: AMD Zen 4 optimizations enabled")
+    elseif(HAS_AVX512_RESULT EQUAL 0)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=x86-64-v4 -mavx512f -mavx512bw -mavx512vl -mavx512dq")
+        message(STATUS "SIMD: AVX-512 optimizations enabled")
+    elseif(HAS_AVX2_RESULT EQUAL 0)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=x86-64-v3 -mavx2 -mfma")
+        message(STATUS "SIMD: AVX2 optimizations enabled")
+    else()
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=x86-64-v2")
+        message(STATUS "SIMD: x86-64-v2 baseline")
+    endif()
+elseif(BASE_ARCH STREQUAL "aarch64")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=native")
+    message(STATUS "SIMD: ARM64 native optimizations enabled")
+endif()
 
 # ============================================
 # Install

@@ -1,0 +1,111 @@
+MIT License
+
+Copyright (c) 2025-2026 Dominique COMET
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+IMPORTANT NOTICES
+================================================================================
+
+1. DIRETTA HOST SDK DEPENDENCY
+
+   This software requires the Diretta Host SDK, which is proprietary software
+   owned by Yu Harada and is NOT included in this repository.
+
+   - Diretta Host SDK Website: https://www.diretta.link
+   - The SDK can be downloaded from: https://www.diretta.link/hostsdk.html
+   - The Diretta Host SDK is licensed separately by Yu Harada
+
+   PERSONAL USE ONLY: The Diretta Host SDK is provided for PERSONAL,
+   NON-COMMERCIAL USE ONLY. Commercial use of the Diretta Host SDK requires
+   separate licensing from Yu Harada.
+
+   This software (excluding the Diretta SDK) is provided under the MIT License
+   above, but its practical use is subject to the Diretta SDK license terms.
+
+2. DIRETTASYNC COMPONENT
+
+   The DirettaSync component is derived from DirettaRendererUPnP v2.0.0,
+   originally developed by Dominique COMET and licensed under MIT.
+
+   Original repository: https://github.com/cometdom/DirettaRendererUPnP
+
+   Contributors to DirettaSync:
+   - Dominique COMET (Original Work)
+   - SwissMontainsBear (Modifications)
+   - Leeeanh (SIMD and PCM Optimizations)
+
+3. SQUEEZELITE DEPENDENCY
+
+   This software launches Squeezelite as a separate process. Squeezelite is
+   licensed under GPL v3 by Adrian Smith and Ralph Irving.
+
+   Squeezelite repository: https://github.com/ralph-irving/squeezelite
+
+   Note: This wrapper communicates with Squeezelite via standard I/O pipes
+   and does not link against or include Squeezelite code directly.
+
+4. TRADEMARK NOTICE
+
+   Diretta is a trademark of Yu Harada. This project is an independent
+   implementation and is not officially endorsed by or affiliated with
+   Yu Harada or Diretta.
+
+   Squeezebox, Logitech Media Server, and Lyrion are trademarks of their
+   respective owners.
+
+5. USAGE RESTRICTIONS SUMMARY
+
+   - Personal use: ALLOWED
+   - Modification and distribution of this code: ALLOWED (under MIT)
+   - Educational and research purposes: ALLOWED
+   - Commercial use (due to Diretta SDK restrictions): NOT ALLOWED
+   - Distribution of the Diretta SDK itself: NOT ALLOWED
+
+   For commercial licensing of Diretta, contact Yu Harada at:
+   https://www.diretta.link
+
+================================================================================
+CREDITS
+================================================================================
+
+- squeeze2diretta Development: Dominique COMET
+- DirettaSync / DirettaRendererUPnP: Dominique COMET, SwissMontainsBear, Leeeanh
+- Diretta Protocol & SDK: Yu Harada (https://www.diretta.link)
+- Squeezelite: Adrian Smith, Ralph Irving
+
+================================================================================
+DISCLAIMER
+================================================================================
+
+This software is provided "as is" and the authors disclaim all warranties
+with regard to this software including all implied warranties of merchantability
+and fitness. In no event shall the authors be liable for any special, direct,
+indirect, or consequential damages or any damages whatsoever resulting from
+loss of use, data or profits, whether in an action of contract, negligence
+or other tortious action, arising out of or in connection with the use or
+performance of this software.
+
+The authors are not responsible for any hardware damage, data loss, or other
+issues that may arise from the use of this software.
+
+================================================================================
+For questions about the Diretta SDK license, please contact Yu Harada.
+================================================================================
