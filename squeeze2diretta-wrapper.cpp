@@ -160,12 +160,21 @@ std::vector<std::string> build_squeezelite_args(const Config& config) {
 
     args.push_back(config.squeezelite_path);
 
-    // Output to STDOUT with specified format
+    // Output to STDOUT - always outputs S32_LE format
     args.push_back("-o");
     args.push_back("-");
 
+    // Force 32-bit output format for consistent STDOUT data
     args.push_back("-a");
-    args.push_back(std::to_string(config.sample_format));
+    args.push_back("32");
+
+    // Restrict to single sample rate if specified, otherwise force 44100 for testing
+    args.push_back("-r");
+    if (!config.rates.empty()) {
+        args.push_back(config.rates);
+    } else {
+        args.push_back("44100");  // Default: force 44.1kHz for consistent output
+    }
 
     // Player name
     args.push_back("-n");
@@ -315,12 +324,17 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     // Setup audio format based on config
+    // IMPORTANT: squeezelite -o - outputs S32_LE (32-bit) regardless of -a setting
+    // Force 32-bit to match actual squeezelite STDOUT output
     AudioFormat format;
-    format.sampleRate = 44100;  // Will be dynamically adjusted
-    format.bitDepth = static_cast<uint32_t>(config.sample_format);
+    format.sampleRate = 44100;  // Default, use -r to restrict rates
+    format.bitDepth = 32;       // squeezelite STDOUT is always S32_LE
     format.channels = 2;
     format.isDSD = false;
     format.isCompressed = false;
+
+    std::cout << "Audio format: " << format.sampleRate << "Hz / "
+              << format.bitDepth << "-bit / " << format.channels << "ch" << std::endl;
 
     // Open Diretta connection with format
     if (!g_diretta->open(format)) {
@@ -361,8 +375,18 @@ int main(int argc, char* argv[]) {
         size_t num_frames = static_cast<size_t>(bytes_read) / bytes_per_frame;
         size_t num_samples = num_frames;  // DirettaSync's sendAudio expects frames for PCM
 
+        // Debug first few reads
+        if (g_verbose && total_frames < CHUNK_SIZE * 5) {
+            std::cout << "Read: " << bytes_read << " bytes, " << num_frames << " frames" << std::endl;
+        }
+
         // Send to Diretta
         size_t written = g_diretta->sendAudio(buffer.data(), num_samples);
+
+        // Debug first few writes
+        if (g_verbose && total_frames < CHUNK_SIZE * 5) {
+            std::cout << "Sent: " << written << " bytes to Diretta" << std::endl;
+        }
 
         if (written == 0 && g_diretta->isPlaying()) {
             // Buffer might be full, yield and retry
