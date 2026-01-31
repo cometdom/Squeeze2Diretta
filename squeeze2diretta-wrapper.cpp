@@ -306,6 +306,9 @@ int main(int argc, char* argv[]) {
         close(pipefd[0]);  // Close read end
         dup2(pipefd[1], STDOUT_FILENO);
 
+        // Disable stdout buffering to ensure immediate write
+        setvbuf(stdout, NULL, _IONBF, 0);
+
         // Also redirect STDERR to parent's STDERR so we can see squeezelite's logs
         // (STDERR is already inherited from parent, no need to change it)
 
