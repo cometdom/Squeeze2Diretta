@@ -197,6 +197,12 @@ std::vector<std::string> build_squeezelite_args(const Config& config) {
         args.push_back(config.codecs);
     }
 
+    // Debug logging (if verbose)
+    if (config.verbose) {
+        args.push_back("-d");
+        args.push_back("all=info");
+    }
+
     // Note: Sample rates already handled above (lines 171-177)
 
     return args;
@@ -299,6 +305,10 @@ int main(int argc, char* argv[]) {
         // Redirect STDOUT to pipe
         close(pipefd[0]);  // Close read end
         dup2(pipefd[1], STDOUT_FILENO);
+
+        // Also redirect STDERR to parent's STDERR so we can see squeezelite's logs
+        // (STDERR is already inherited from parent, no need to change it)
+
         close(pipefd[1]);
 
         // Convert args to C-style array
