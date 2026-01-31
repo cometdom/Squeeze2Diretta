@@ -389,8 +389,11 @@ int main(int argc, char* argv[]) {
         size_t num_frames = static_cast<size_t>(bytes_read) / bytes_per_frame;
         size_t num_samples = num_frames;  // DirettaSync's sendAudio expects frames for PCM
 
-        // Debug first few reads
-        if (g_verbose && total_frames < CHUNK_SIZE * 5) {
+        // Debug first few reads and periodic sample range checks
+        bool show_detail = (total_frames < CHUNK_SIZE * 5);
+        bool show_periodic = (total_frames % (44100 * 2) < CHUNK_SIZE);  // Every 2 seconds
+
+        if (g_verbose && (show_detail || show_periodic)) {
             std::cout << "Read: " << bytes_read << " bytes, " << num_frames << " frames" << std::endl;
 
             // Check if data is silence (all zeros) or has audio content
@@ -403,19 +406,21 @@ int main(int argc, char* argv[]) {
             }
             std::cout << "  Sample range: [" << min_sample << " .. " << max_sample << "]" << std::endl;
 
-            // Show first few bytes in hex
-            std::cout << "  First 16 bytes: ";
-            for (int i = 0; i < 16 && i < bytes_read; i++) {
-                printf("%02x ", buffer[i]);
+            // Show first few bytes in hex (only for initial reads)
+            if (show_detail) {
+                std::cout << "  First 16 bytes: ";
+                for (int i = 0; i < 16 && i < bytes_read; i++) {
+                    printf("%02x ", buffer[i]);
+                }
+                std::cout << std::endl;
             }
-            std::cout << std::endl;
         }
 
         // Send to Diretta
         size_t written = g_diretta->sendAudio(buffer.data(), num_samples);
 
         // Debug first few writes
-        if (g_verbose && total_frames < CHUNK_SIZE * 5) {
+        if (g_verbose && show_detail) {
             std::cout << "Sent: " << written << " bytes to Diretta" << std::endl;
         }
 
