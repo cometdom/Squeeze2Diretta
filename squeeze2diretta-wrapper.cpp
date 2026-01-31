@@ -162,16 +162,17 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
 
     args.push_back(config.squeezelite_path);
 
-    // Output to stdout ("-") - squeezelite always outputs S32_LE format
+    // Output to stdout with explicit format - force 44100Hz 32-bit 2-channel
+    // Format: -:<samplerate>:<bits>:<channels> forces squeezelite to resample to this format
     args.push_back("-o");
-    args.push_back(output_path);
+    args.push_back("-:44100:32:2");
 
     // Sample rates (only if user specified via -r option)
     if (!config.rates.empty()) {
         args.push_back("-r");
         args.push_back(config.rates);
     }
-    // Note: Without -r, squeezelite uses native sample rate from LMS (no resampling)
+    // Note: -o format forces output to 44100Hz - squeezelite will resample all content
 
     // Player name
     args.push_back("-n");
