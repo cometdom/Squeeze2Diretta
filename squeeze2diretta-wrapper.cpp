@@ -41,7 +41,6 @@
 static pid_t squeezelite_pid = 0;
 static bool running = true;
 static std::unique_ptr<DirettaSync> g_diretta;  // For signal handler access
-static std::string g_fifo_path;  // FIFO path for cleanup
 
 // Signal handler for clean shutdown
 void signal_handler(int sig) {
@@ -50,11 +49,6 @@ void signal_handler(int sig) {
 
     if (squeezelite_pid > 0) {
         kill(squeezelite_pid, SIGTERM);
-    }
-
-    // Clean up FIFO
-    if (!g_fifo_path.empty()) {
-        unlink(g_fifo_path.c_str());
     }
 }
 
@@ -168,7 +162,7 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
 
     args.push_back(config.squeezelite_path);
 
-    // Output to FIFO or STDOUT - squeezelite always outputs S32_LE format
+    // Output to stdout ("-") - squeezelite always outputs S32_LE format
     args.push_back("-o");
     args.push_back(output_path);
 
@@ -278,23 +272,17 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Diretta enabled successfully" << std::endl;
 
-    // Create FIFO for squeezelite output
-    g_fifo_path = "/tmp/squeeze2diretta_" + std::to_string(getpid()) + ".fifo";
-
-    // Remove old FIFO if it exists
-    unlink(g_fifo_path.c_str());
-
-    if (mkfifo(g_fifo_path.c_str(), 0600) == -1) {
-        std::cerr << "Failed to create FIFO: " << strerror(errno) << std::endl;
+    // Create pipe for squeezelite stdout
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        std::cerr << "Failed to create pipe: " << strerror(errno) << std::endl;
         g_diretta->disable();
         if (g_logRing) delete g_logRing;
         return 1;
     }
 
-    std::cout << "Created FIFO: " << g_fifo_path << std::endl;
-
-    // Build and display squeezelite command (with FIFO path)
-    std::vector<std::string> squeezelite_args = build_squeezelite_args(config, g_fifo_path);
+    // Build and display squeezelite command (with stdout output)
+    std::vector<std::string> squeezelite_args = build_squeezelite_args(config, "-");
     if (g_verbose) {
         std::cout << "Squeezelite command: ";
         for (const auto& arg : squeezelite_args) {
@@ -308,15 +296,23 @@ int main(int argc, char* argv[]) {
 
     if (squeezelite_pid == -1) {
         std::cerr << "Failed to fork" << std::endl;
-        unlink(g_fifo_path.c_str());
+        close(pipefd[0]);
+        close(pipefd[1]);
         g_diretta->disable();
         if (g_logRing) delete g_logRing;
         return 1;
     }
 
     if (squeezelite_pid == 0) {
-        // Child process: run squeezelite
-        // No need to redirect anything - squeezelite will open the FIFO itself
+        // Child process: redirect stdout to pipe and run squeezelite
+        close(pipefd[0]);  // Close read end in child
+
+        // Redirect stdout to pipe write end
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
+            std::cerr << "Failed to redirect stdout: " << strerror(errno) << std::endl;
+            exit(1);
+        }
+        close(pipefd[1]);  // Close original pipe write fd
 
         // Convert args to C-style array
         std::vector<char*> c_args;
@@ -333,17 +329,9 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    // Parent process: open FIFO for reading
-    std::cout << "Opening FIFO for reading..." << std::endl;
-    int fifo_fd = open(g_fifo_path.c_str(), O_RDONLY);
-    if (fifo_fd == -1) {
-        std::cerr << "Failed to open FIFO: " << strerror(errno) << std::endl;
-        kill(squeezelite_pid, SIGTERM);
-        unlink(g_fifo_path.c_str());
-        g_diretta->disable();
-        if (g_logRing) delete g_logRing;
-        return 1;
-    }
+    // Parent process: close write end and read from pipe
+    close(pipefd[1]);  // Close write end in parent
+    int fifo_fd = pipefd[0];  // Read from pipe
 
     std::cout << "Squeezelite started (PID: " << squeezelite_pid << ")" << std::endl;
     std::cout << "Waiting for audio stream..." << std::endl;
@@ -461,12 +449,6 @@ int main(int argc, char* argv[]) {
     if (squeezelite_pid > 0) {
         kill(squeezelite_pid, SIGTERM);
         waitpid(squeezelite_pid, nullptr, 0);
-    }
-
-    // Clean up FIFO
-    if (!g_fifo_path.empty()) {
-        unlink(g_fifo_path.c_str());
-        std::cout << "Cleaned up FIFO" << std::endl;
     }
 
     // Cleanup log ring
