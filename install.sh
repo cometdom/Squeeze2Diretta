@@ -554,7 +554,7 @@ LMS_SERVER="${LMS_SERVER:-192.168.1.100}"
 TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
-DSD_FORMAT="${DSD_FORMAT:-:u32be}"
+DSD_FORMAT="${DSD_FORMAT:-u32be}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 
@@ -570,9 +570,12 @@ CMD="$CMD --target $TARGET"
 CMD="$CMD -n $PLAYER_NAME"
 CMD="$CMD -r $MAX_SAMPLE_RATE"
 
-# DSD format: :u32be (native, default for LMS) or dop (for Roon)
+# DSD format: u32be (native, default for LMS) or dop (for Roon)
+# Note: Add colon prefix for native DSD formats (required by squeezelite)
 if [ "$DSD_FORMAT" = "dop" ]; then
     CMD="$CMD -D"
+elif [ "$DSD_FORMAT" = "u32be" ] || [ "$DSD_FORMAT" = "u32le" ]; then
+    CMD="$CMD -D :$DSD_FORMAT"
 else
     CMD="$CMD -D $DSD_FORMAT"
 fi
@@ -648,10 +651,10 @@ MAX_SAMPLE_RATE=768000
 
 # DSD output format
 # Options:
-#   :u32be  = Native DSD Big Endian (default, for LMS)
-#   :u32le  = Native DSD Little Endian
-#   dop     = DSD over PCM (for Roon)
-DSD_FORMAT=:u32be
+#   u32be  = Native DSD Big Endian (default, for LMS)
+#   u32le  = Native DSD Little Endian
+#   dop    = DSD over PCM (for Roon)
+DSD_FORMAT=u32be
 
 # Verbose mode
 # Set to "-v" for debug output, leave empty for normal operation
@@ -671,7 +674,7 @@ EXTRA_OPTS=""
 #
 # Problem: DSD files play as noise
 # Solution: Check that your DAC supports native DSD
-#           Try different DSD_FORMAT values (:u32be, :u32le, dop)
+#           Try different DSD_FORMAT values (u32be, u32le, dop)
 #
 # Problem: Using Roon instead of LMS
 # Solution: Set DSD_FORMAT=dop (Roon sends DoP, not native DSD)
