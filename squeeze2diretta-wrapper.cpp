@@ -195,12 +195,17 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
     args.push_back("-o");
     args.push_back(output_path);
 
-    // Sample rates (only if user specified via -r option)
+    // Sample rates - CRITICAL for DSD support
+    // When using STDOUT output, squeezelite needs to know supported rates
+    // Default range covers all PCM rates and DSD frame rates (up to DSD512)
+    args.push_back("-r");
     if (!config.rates.empty()) {
-        args.push_back("-r");
-        args.push_back(config.rates);
+        // User specified max rate - create range from 44100 to max
+        args.push_back("44100-" + config.rates);
+    } else {
+        // Default: support up to 768kHz (covers DSD512 frame rate of 705600)
+        args.push_back("44100-768000");
     }
-    // Note: -o format forces output to 44100Hz - squeezelite will resample all content
 
     // Player name
     args.push_back("-n");
