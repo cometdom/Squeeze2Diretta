@@ -261,7 +261,8 @@ void monitor_squeezelite_stderr(int stderr_fd) {
 
     // Regex patterns
     std::regex sample_rate_regex(R"(track start sample rate:\s*(\d+))");
-    std::regex dsd_format_regex(R"(format:\s*(DOP|DSD_U32_BE|DSD_U32_LE))");  // Match any DSD format
+    std::regex dsd_format_regex(R"(format:\s*(DOP|DSD_U32_BE|DSD_U32_LE))");  // Match native DSD format
+    std::regex dop_contains_regex(R"(file contains DOP)");  // Match DoP from Roon/FLAC container
     std::regex pcm_codec_regex(R"(codec open: '[fpom]')");  // PCM codecs
 
     while (running) {
@@ -303,6 +304,18 @@ void monitor_squeezelite_stderr(int stderr_fd) {
                     g_is_dsd.store(true);
                     g_format_pending.store(true);
                     // Don't trigger reopen yet - wait for sample rate
+                }
+            }
+            // Check for DoP from Roon (different log format: "file contains DOP")
+            else if (std::regex_search(line, dop_contains_regex)) {
+                bool was_dsd = g_is_dsd.load();
+                if (!was_dsd) {
+                    if (g_verbose) {
+                        std::cout << "\n[Format Detected] DoP (from Roon/container)" << std::endl;
+                    }
+                    g_dsd_format_type.store(static_cast<int>(DSDFormatType::DOP));
+                    g_is_dsd.store(true);
+                    g_format_pending.store(true);
                 }
             }
             // Check for PCM codec (switch back from DSD to PCM)
