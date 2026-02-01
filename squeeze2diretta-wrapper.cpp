@@ -672,6 +672,11 @@ int main(int argc, char* argv[]) {
 
         if (format.isDSD && (static_cast<DSDFormatType>(g_dsd_format_type.load()) == DSDFormatType::U32_BE ||
                              static_cast<DSDFormatType>(g_dsd_format_type.load()) == DSDFormatType::U32_LE)) {
+            // TEST: Try sending data as-is (no conversion) to see if squeezelite already outputs planar
+            std::cout << "[DEBUG] Sending DSD data without interleaved→planar conversion" << std::endl;
+            written = g_diretta->sendAudio(buffer.data(), num_samples);
+
+            /* ORIGINAL CODE - keeping for reference:
             // For native DSD: Convert from interleaved to planar format
             // Squeezelite sends: [L0L0L0L0 R0R0R0R0 L1L1L1L1 R1R1R1R1...]
             // DirettaSync expects: [L0L0L0L0 L1L1L1L1...][R0R0R0R0 R1R1R1R1...]
@@ -692,6 +697,7 @@ int main(int argc, char* argv[]) {
             }
 
             written = g_diretta->sendAudio(planar_buffer.data(), num_samples);
+            */
         } else {
             // PCM or DoP: send as-is (already in correct format)
             written = g_diretta->sendAudio(buffer.data(), num_samples);
