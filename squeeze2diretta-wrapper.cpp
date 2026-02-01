@@ -534,6 +534,7 @@ int main(int argc, char* argv[]) {
     // For rate limiting - track timing to send at correct sample rate
     auto start_time = std::chrono::steady_clock::now();
     uint64_t frames_sent = 0;
+    unsigned int rate_for_timing = current_rate;  // Rate to use for timing calculations
 
     while (running) {
         // Check if Diretta needs to be reopened (sample rate or format change)
@@ -576,6 +577,15 @@ int main(int argc, char* argv[]) {
             format.sampleRate = actual_rate;  // True DSD bit rate or PCM rate
             format.isCompressed = false;
             format.bitDepth = bit_depth;  // 1 for native DSD, 32 for DoP/PCM
+
+            // Set rate for timing calculations
+            // For native DSD: use squeezelite frame rate (not bit rate)
+            // For PCM/DoP: use actual rate
+            if (is_dsd && (dsd_format == DSDFormatType::U32_BE || dsd_format == DSDFormatType::U32_LE)) {
+                rate_for_timing = squeezelite_rate;  // Frame rate (e.g., 88200 Hz)
+            } else {
+                rate_for_timing = actual_rate;  // PCM rate or DoP rate
+            }
 
             // Reopen Diretta with new format
             if (!g_diretta->open(format)) {
@@ -704,8 +714,9 @@ int main(int argc, char* argv[]) {
 
         // Rate limiting: Sleep to maintain correct playback speed
         // Calculate expected time for frames sent so far
+        // Use rate_for_timing (frame rate for DSD, sample rate for PCM)
         auto expected_time = start_time + std::chrono::microseconds(
-            (frames_sent * 1000000ULL) / format.sampleRate);
+            (frames_sent * 1000000ULL) / rate_for_timing);
         auto now = std::chrono::steady_clock::now();
 
         // If we're ahead of schedule, sleep
@@ -714,8 +725,8 @@ int main(int argc, char* argv[]) {
         }
 
         // Print progress every ~10 seconds
-        if (g_verbose && total_frames % (current_rate * 10) < CHUNK_SIZE) {
-            double seconds = static_cast<double>(total_frames) / static_cast<double>(current_rate);
+        if (g_verbose && total_frames % (rate_for_timing * 10) < CHUNK_SIZE) {
+            double seconds = static_cast<double>(total_frames) / static_cast<double>(rate_for_timing);
             std::cout << "Streamed: " << std::fixed << std::setprecision(1)
                       << seconds << "s (" << (total_bytes / 1024 / 1024) << " MB)" << std::endl;
         }
