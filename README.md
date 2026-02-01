@@ -368,6 +368,53 @@ Common options that squeeze2diretta passes to Squeezelite:
 -d <categories>        Debug output (e.g., all=info)
 ```
 
+### Configuration File (squeeze2diretta.conf)
+
+When using the systemd service, all settings are stored in `/etc/squeeze2diretta.conf`. Edit this file to customize your installation:
+
+```bash
+sudo nano /etc/squeeze2diretta.conf
+```
+
+**Key settings:**
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `LMS_SERVER` | IP address of your LMS server | `192.168.1.100` |
+| `TARGET` | Diretta target number (use `--list-targets` to find) | `1` |
+| `PLAYER_NAME` | Name shown in LMS web interface | `squeeze2diretta` |
+| `MAX_SAMPLE_RATE` | Maximum sample rate in Hz | `768000` |
+| `DSD_FORMAT` | DSD output format (see below) | `u32be` |
+| `VERBOSE` | Set to `-v` for debug output | (empty) |
+
+### DSD Format: LMS vs Roon
+
+The `DSD_FORMAT` setting is critical for proper DSD playback:
+
+| Source | DSD_FORMAT | Description |
+|--------|------------|-------------|
+| **LMS (Logitech Media Server)** | `u32be` | Native DSD Big Endian. LMS sends true DSD data. |
+| **Roon** | `dop` | DoP (DSD over PCM). Roon's Squeezebox emulation only supports DoP. |
+
+**For LMS users:**
+```bash
+# In /etc/squeeze2diretta.conf
+DSD_FORMAT=u32be
+```
+LMS can send native DSD directly to Squeezelite, providing the best quality path.
+
+**For Roon users:**
+```bash
+# In /etc/squeeze2diretta.conf
+DSD_FORMAT=dop
+```
+Roon's Squeezebox protocol emulation has limitations and sends DSD as DoP (DSD over PCM). squeeze2diretta automatically converts DoP back to native DSD for the Diretta Target.
+
+**After editing, restart the service:**
+```bash
+sudo systemctl restart squeeze2diretta
+```
+
 ---
 
 ## Systemd Service (Auto-Start)
