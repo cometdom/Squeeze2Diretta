@@ -32,12 +32,11 @@ CMD="$CMD --target $TARGET"
 CMD="$CMD -n $PLAYER_NAME"
 CMD="$CMD -r $MAX_SAMPLE_RATE"
 # DSD format - only add if not empty
-# Add colon prefix if not already present
+# The C++ code adds the colon prefix automatically
 if [ -n "$DSD_FORMAT" ]; then
-    case "$DSD_FORMAT" in
-        :*) CMD="$CMD -D $DSD_FORMAT" ;;
-        *)  CMD="$CMD -D :$DSD_FORMAT" ;;
-    esac
+    # Remove leading colon if present (C++ will add it)
+    DSD_FORMAT_CLEAN="${DSD_FORMAT#:}"
+    CMD="$CMD -D $DSD_FORMAT_CLEAN"
 fi
 
 # Optional verbose mode

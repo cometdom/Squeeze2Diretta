@@ -232,8 +232,12 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
     if (!config.dsd_format.empty()) {
         args.push_back("-D");
         if (config.dsd_format != "dop") {
-            // Native DSD format (e.g., ":u32be" or ":u32le")
-            args.push_back(config.dsd_format);
+            // Native DSD format - add colon prefix if not present
+            std::string dsd_arg = config.dsd_format;
+            if (dsd_arg[0] != ':') {
+                dsd_arg = ":" + dsd_arg;
+            }
+            args.push_back(dsd_arg);
         }
         // If "dop", -D alone enables DoP
     }
