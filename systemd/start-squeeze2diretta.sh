@@ -4,16 +4,23 @@
 
 set -e
 
-# Default values (can be overridden by config file)
+INSTALL_DIR="/opt/squeeze2diretta"
+CONFIG_FILE="$INSTALL_DIR/squeeze2diretta.conf"
+
+# Source config file if it exists
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# Default values (if not set by config file)
 LMS_SERVER="${LMS_SERVER:-192.168.1.100}"
 TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
-DSD_FORMAT="${DSD_FORMAT:-:u32be}"
+DSD_FORMAT="${DSD_FORMAT:-u32be}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
-
-INSTALL_DIR="/opt/squeeze2diretta"
 SQUEEZE2DIRETTA="$INSTALL_DIR/squeeze2diretta"
 SQUEEZELITE="$INSTALL_DIR/squeezelite"
 
