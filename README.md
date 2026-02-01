@@ -179,7 +179,30 @@ cd squeeze2diretta
 # 3. Run interactive installer
 chmod +x install.sh
 ./install.sh
-\`\`\`
+```
+
+> **Tip: Transferring files from Windows to Linux**
+>
+> If you downloaded the SDK on Windows and need to transfer it to your Linux machine:
+>
+> **Using PowerShell or CMD** (OpenSSH is built into Windows 10/11):
+> ```powershell
+> # Transfer the SDK archive to your Linux machine
+> # Replace with actual filename (e.g., DirettaHostSDK_148_5.tar.zst)
+> scp C:\Users\YourName\Downloads\DirettaHostSDK_XXX_Y.tar.zst user@linux-ip:~/
+> ```
+>
+> **Using WSL** (Windows Subsystem for Linux):
+> ```bash
+> # Windows files are accessible under /mnt/c/
+> cp /mnt/c/Users/YourName/Downloads/DirettaHostSDK_*.tar.zst ~/
+> ```
+>
+> Then extract on Linux:
+> ```bash
+> cd ~
+> tar --zstd -xf DirettaHostSDK_*.tar.zst
+> ```
 
 The installer provides an interactive menu with options for:
 - **Full installation** (recommended) - Everything in one go
