@@ -521,7 +521,9 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     // Read audio data from pipe and send to Diretta
-    const size_t CHUNK_SIZE = 2048;  // frames per read (smaller chunks for better flow control)
+    // For DSD: 4096 frames * 8 bytes/frame = 32768 bytes per packet
+    // For PCM: 4096 frames * 8 bytes/frame = 32768 bytes per packet
+    const size_t CHUNK_SIZE = 4096;  // frames per read
 
     // Calculate bytes per frame - always PCM: (bitDepth/8) * channels
     size_t bytes_per_frame = (format.bitDepth / 8) * format.channels;
