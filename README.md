@@ -14,6 +14,26 @@
 
 ---
 
+## Support This Project
+
+If you find this tool valuable, you can support development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/cometdom)
+
+**Important notes:**
+- Donations are **optional** and appreciated
+- Help cover test equipment and coffee
+- **No guarantees** for features, support, or timelines
+- The project remains free and open source for everyone
+
+---
+
+## IMPORTANT - PERSONAL USE ONLY
+
+This tool uses the **Diretta Host SDK**, which is proprietary software by Yu Harada available for **personal use only**. Commercial use is strictly prohibited. See [LICENSE](LICENSE) for details.
+
+---
+
 ## Overview
 
 **squeeze2diretta** bridges Logitech Media Server (LMS) and Squeezelite to Diretta protocol endpoints, enabling bit-perfect playback of high-resolution PCM and native DSD through Diretta Targets. It uses the advanced DirettaSync implementation from DirettaRendererUPnP v2.0 for low-latency, high-quality audio streaming.
@@ -136,7 +156,47 @@ Same as DirettaRendererUPnP - the build system automatically detects your CPU:
 
 ## Quick Start
 
-### 1. Install System Dependencies
+### Option A: Interactive Installer (Recommended)
+
+The easiest way to install squeeze2diretta is using the interactive installer:
+
+\`\`\`bash
+# 1. Download Diretta Host SDK first
+#    Visit: https://www.diretta.link/hostsdk.html
+#    Extract to: ~/DirettaHostSDK_148
+
+# 2. Clone repository
+git clone https://github.com/cometdom/squeeze2diretta.git
+cd squeeze2diretta
+
+# 3. Run interactive installer
+chmod +x install.sh
+./install.sh
+\`\`\`
+
+The installer provides an interactive menu with options for:
+- **Full installation** (recommended) - Everything in one go
+- **Setup Squeezelite only** - Download, patch, and compile Squeezelite
+- **Build only** - Compile squeeze2diretta (if dependencies are already installed)
+- **Install systemd service** - Set up automatic startup
+- **Configure network** - MTU, buffers, and firewall
+- **Aggressive optimization** (Fedora only) - For dedicated audio servers
+
+**Command-line options:**
+\`\`\`bash
+./install.sh --full       # Full installation (non-interactive)
+./install.sh --build      # Build only
+./install.sh --service    # Install systemd service only
+./install.sh --help       # Show all options
+\`\`\`
+
+---
+
+### Option B: Manual Installation
+
+If you prefer manual control, follow these steps:
+
+#### 1. Install System Dependencies
 
 **Fedora:**
 \`\`\`bash
@@ -158,7 +218,7 @@ sudo pacman -S base-devel cmake git patch \\
     alsa-lib flac libvorbis libmad mpg123 opus soxr openssl
 \`\`\`
 
-### 2. Download Diretta Host SDK
+#### 2. Download Diretta Host SDK
 
 1. Visit [diretta.link](https://www.diretta.link/hostsdk.html)
 2. Download **DirettaHostSDK_148** (or latest version)
@@ -167,22 +227,18 @@ sudo pacman -S base-devel cmake git patch \\
    - \`/opt/DirettaHostSDK_148\`
    - Or set \`DIRETTA_SDK_PATH\` environment variable
 
-### 3. Clone Repository
+#### 3. Clone Repository
 
 \`\`\`bash
-git clone https://github.com/yourusername/squeeze2diretta.git
+git clone https://github.com/cometdom/squeeze2diretta.git
 cd squeeze2diretta
 \`\`\`
 
-### 4. Setup Squeezelite (Automated)
-
-The included script compiles Squeezelite with the required patch for native DSD support:
+#### 4. Setup Squeezelite
 
 \`\`\`bash
-# Make script executable
-chmod +x setup-squeezelite.sh
-
 # Run automated setup (downloads, patches, compiles)
+chmod +x setup-squeezelite.sh
 ./setup-squeezelite.sh
 \`\`\`
 
@@ -192,14 +248,11 @@ chmod +x setup-squeezelite.sh
 3. Compiles with native DSD support enabled
 4. Creates \`squeezelite/squeezelite\` binary ready to use
 
-**Manual alternative:** See [SQUEEZELITE.md](SQUEEZELITE.md) for manual compilation steps.
-
-### 5. Build squeeze2diretta
+#### 5. Build squeeze2diretta
 
 \`\`\`bash
 # Create build directory
-mkdir build
-cd build
+mkdir build && cd build
 
 # Configure and build (auto-detects SDK and architecture)
 cmake ..
