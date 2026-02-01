@@ -672,11 +672,6 @@ int main(int argc, char* argv[]) {
 
         if (format.isDSD && (static_cast<DSDFormatType>(g_dsd_format_type.load()) == DSDFormatType::U32_BE ||
                              static_cast<DSDFormatType>(g_dsd_format_type.load()) == DSDFormatType::U32_LE)) {
-            // TEST: Try sending data as-is (no conversion) to see if squeezelite already outputs planar
-            std::cout << "[DEBUG] Sending DSD data without interleaved→planar conversion" << std::endl;
-            written = g_diretta->sendAudio(buffer.data(), num_samples);
-
-            /* ORIGINAL CODE - keeping for reference:
             // For native DSD: Convert from interleaved to planar format
             // Squeezelite sends: [L0L0L0L0 R0R0R0R0 L1L1L1L1 R1R1R1R1...]
             // DirettaSync expects: [L0L0L0L0 L1L1L1L1...][R0R0R0R0 R1R1R1R1...]
@@ -696,8 +691,31 @@ int main(int argc, char* argv[]) {
                 memcpy(&planar_buffer[dst_offset_R], &buffer[src_offset + 4], 4);
             }
 
-            written = g_diretta->sendAudio(planar_buffer.data(), num_samples);
-            */
+            // Debug: Show before/after conversion for first packet with real data
+            static bool shown_conversion = false;
+            if (!shown_conversion && buffer[0] != 0) {
+                shown_conversion = true;
+                std::cout << "\n[DEBUG] DSD Conversion Example:" << std::endl;
+                std::cout << "  Input (interleaved), first 32 bytes:" << std::endl;
+                std::cout << "    ";
+                for (int i = 0; i < 32 && i < bytes_read; i++) {
+                    printf("%02x ", buffer[i]);
+                    if ((i + 1) % 8 == 0) std::cout << std::endl << "    ";
+                }
+                std::cout << std::endl;
+                std::cout << "  Output (planar), first 16 bytes L + first 16 bytes R:" << std::endl;
+                std::cout << "    L: ";
+                for (int i = 0; i < 16 && i < bytes_per_channel; i++) {
+                    printf("%02x ", planar_buffer[i]);
+                }
+                std::cout << std::endl << "    R: ";
+                for (int i = 0; i < 16 && i < bytes_per_channel; i++) {
+                    printf("%02x ", planar_buffer[bytes_per_channel + i]);
+                }
+                std::cout << std::endl << std::endl;
+            }
+
+            written = g_diretta->sendAudio(planar_buffer.data(), num_samples)
         } else {
             // PCM or DoP: send as-is (already in correct format)
             written = g_diretta->sendAudio(buffer.data(), num_samples);
