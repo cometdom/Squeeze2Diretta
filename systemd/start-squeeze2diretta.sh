@@ -18,7 +18,6 @@ LMS_SERVER="${LMS_SERVER:-192.168.1.100}"
 TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
-DSD_FORMAT="${DSD_FORMAT:-u32be}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 SQUEEZE2DIRETTA="$INSTALL_DIR/squeeze2diretta"
@@ -31,13 +30,7 @@ CMD="$CMD -s $LMS_SERVER"
 CMD="$CMD --target $TARGET"
 CMD="$CMD -n $PLAYER_NAME"
 CMD="$CMD -r $MAX_SAMPLE_RATE"
-# DSD format - only add if not empty
-# The C++ code adds the colon prefix automatically
-if [ -n "$DSD_FORMAT" ]; then
-    # Remove leading colon if present (C++ will add it)
-    DSD_FORMAT_CLEAN="${DSD_FORMAT#:}"
-    CMD="$CMD -D $DSD_FORMAT_CLEAN"
-fi
+# Note: DSD format (-D :u32be) is hardcoded in squeeze2diretta for Diretta compatibility
 
 # Optional verbose mode
 if [ -n "$VERBOSE" ]; then
@@ -59,7 +52,7 @@ echo "  LMS Server:       $LMS_SERVER"
 echo "  Diretta Target:   $TARGET"
 echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
-echo "  DSD Format:       $DSD_FORMAT"
+echo "  DSD Format:       :u32be (hardcoded)"
 echo ""
 echo "Command:"
 echo "  $CMD"

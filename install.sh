@@ -550,7 +550,6 @@ LMS_SERVER="${LMS_SERVER:-192.168.1.100}"
 TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
-DSD_FORMAT="${DSD_FORMAT:-:u32be}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 
@@ -559,13 +558,13 @@ SQUEEZE2DIRETTA="$INSTALL_DIR/squeeze2diretta"
 SQUEEZELITE="$INSTALL_DIR/squeezelite"
 
 # Build command
+# Note: DSD format (-D :u32be) is hardcoded in squeeze2diretta
 CMD="$SQUEEZE2DIRETTA"
 CMD="$CMD --squeezelite $SQUEEZELITE"
 CMD="$CMD -s $LMS_SERVER"
 CMD="$CMD --target $TARGET"
 CMD="$CMD -n $PLAYER_NAME"
 CMD="$CMD -r $MAX_SAMPLE_RATE"
-CMD="$CMD -D $DSD_FORMAT"
 
 # Optional verbose mode
 if [ -n "$VERBOSE" ]; then
@@ -587,7 +586,7 @@ echo "  LMS Server:       $LMS_SERVER"
 echo "  Diretta Target:   $TARGET"
 echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
-echo "  DSD Format:       $DSD_FORMAT"
+echo "  DSD Format:       :u32be (hardcoded)"
 echo ""
 echo "Command:"
 echo "  $CMD"
@@ -636,11 +635,8 @@ PLAYER_NAME=squeeze2diretta
 # Common values: 192000, 384000, 768000
 MAX_SAMPLE_RATE=768000
 
-# DSD output format
-# Options: ":u32be" (Big Endian), ":u32le" (Little Endian), ":dop" (DSD over PCM)
-# Recommended: ":u32be" for native DSD
-# Note: Quotes are required for systemd EnvironmentFile
-DSD_FORMAT=":u32be"
+# DSD output format is hardcoded to :u32be in squeeze2diretta
+# This is the optimal setting for Diretta and cannot be changed
 
 # Verbose mode
 # Set to "-v" for debug output, leave empty for normal operation
@@ -659,8 +655,8 @@ EXTRA_OPTS=""
 #           Check TARGET number matches your Diretta device
 #
 # Problem: DSD files play as noise
-# Solution: Ensure DSD_FORMAT is set to :u32be
-#           Check that your DAC supports native DSD
+# Solution: Check that your DAC supports native DSD
+#           DSD format is hardcoded to :u32be (optimal for Diretta)
 #
 # Problem: Player not showing in LMS
 # Solution: Check firewall allows ports 3483 and 9000
