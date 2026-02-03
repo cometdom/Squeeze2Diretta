@@ -185,24 +185,17 @@ namespace DirettaRetry {
 //=============================================================================
 
 namespace DirettaBuffer {
-    constexpr float DSD_BUFFER_SECONDS = 0.8f;
-    constexpr float PCM_BUFFER_SECONDS = 0.3f;  // Was 1.0f - low latency
+    constexpr float DSD_BUFFER_SECONDS = 2.0f;   // Increased for squeezelite continuous stream
+    constexpr float PCM_BUFFER_SECONDS = 2.0f;   // Increased for squeezelite continuous stream
 
     constexpr size_t DSD_PREFILL_MS = 200;
-    constexpr size_t PCM_PREFILL_MS = 30;       // Was 50 - faster start
-    constexpr size_t PCM_LOWRATE_PREFILL_MS = 100;
+    constexpr size_t PCM_PREFILL_MS = 100;       // Increased for stability
+    constexpr size_t PCM_LOWRATE_PREFILL_MS = 150;
 
-    // Aligned prefill targets (for whole-buffer alignment)
-    // Compressed formats (FLAC, ALAC) have variable decode times - need more buffer
-    // Uncompressed formats (WAV, AIFF) have predictable timing - less buffer needed
-    constexpr size_t PREFILL_MS_COMPRESSED = 200;    // FLAC, ALAC
-    constexpr size_t PREFILL_MS_UNCOMPRESSED = 100;  // WAV, AIFF
-    constexpr size_t PREFILL_MS_DSD = 150;           // DSD (fixed)
-
-    constexpr unsigned int DAC_STABILIZATION_MS = 100;
+    constexpr unsigned int DAC_STABILIZATION_MS = 50;    // Reduced
     constexpr unsigned int ONLINE_WAIT_MS = 2000;
     constexpr unsigned int FORMAT_SWITCH_DELAY_MS = 800;
-    constexpr unsigned int POST_ONLINE_SILENCE_BUFFERS = 20;  // Was 50 - reduced for faster start
+    constexpr unsigned int POST_ONLINE_SILENCE_BUFFERS = 5;  // Reduced for faster start with squeezelite
 
     // UPnP push model needs larger buffers than MPD's pull model
     // 64KB = ~370ms floor at 44.1kHz/16-bit, negligible at higher rates
@@ -462,10 +455,8 @@ private:
 
     void configureSinkPCM(int rate, int channels, int inputBits, int& acceptedBits);
     void configureSinkDSD(uint32_t dsdBitRate, int channels, const AudioFormat& format);
-    void configureRingPCM(int rate, int channels, int direttaBps, int inputBps, bool isCompressed);
+    void configureRingPCM(int rate, int channels, int direttaBps, int inputBps);
     void configureRingDSD(uint32_t byteRate, int channels);
-    size_t calculateAlignedPrefill(size_t bytesPerSecond, size_t bytesPerBuffer,
-                                   bool isDSD, bool isCompressed);
     void beginReconfigure();
     void endReconfigure();
 
@@ -557,7 +548,6 @@ private:
     std::atomic<uint32_t> m_framesPerBufferAccumulator{0};
     std::atomic<bool> m_need24BitPack{false};
     std::atomic<bool> m_need16To32Upsample{false};
-    std::atomic<bool> m_need16To24Upsample{false};
     std::atomic<bool> m_isDsdMode{false};
     std::atomic<bool> m_needDsdBitReversal{false};
     std::atomic<bool> m_needDsdByteSwap{false};  // For LITTLE endian targets
@@ -577,7 +567,6 @@ private:
     bool m_cachedDsdMode{false};
     bool m_cachedPack24bit{false};
     bool m_cachedUpsample16to32{false};
-    bool m_cachedUpsample16to24{false};
     int m_cachedChannels{2};
     int m_cachedBytesPerSample{2};
     DirettaRingBuffer::DSDConversionMode m_cachedDsdConversionMode{DirettaRingBuffer::DSDConversionMode::Passthrough};
@@ -596,8 +585,7 @@ private:
     uint32_t m_cachedFramesPerBufferRemainder{0};
 
     // Prefill and stabilization
-    size_t m_prefillTarget = 0;           // Prefill target in bytes
-    size_t m_prefillTargetBuffers = 0;    // Prefill target in whole buffer count
+    size_t m_prefillTarget = 0;
     std::atomic<bool> m_prefillComplete{false};
     std::atomic<bool> m_postOnlineDelayDone{false};
     std::atomic<int> m_silenceBuffersRemaining{0};
