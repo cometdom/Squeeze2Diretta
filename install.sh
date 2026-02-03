@@ -756,6 +756,10 @@ Nice=-10
 IOSchedulingClass=realtime
 IOSchedulingPriority=0
 
+# Real-time priority (required for MS 3 mode)
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+
 [Install]
 WantedBy=multi-user.target
 SERVICE_EOF
