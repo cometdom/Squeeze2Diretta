@@ -205,9 +205,14 @@ main() {
     echo "================================================================"
     echo ""
     echo "Next steps:"
-    echo "  1. Configure your LMS server and Diretta target"
-    echo "  2. Run: ./build/squeeze2diretta-wrapper --help"
-    echo "  3. Start streaming: ./build/squeeze2diretta-wrapper -s <LMS_IP> -t <DAC_IP>"
+    echo "  1. List available Diretta targets:"
+    echo "     ./build/squeeze2diretta --list-targets"
+    echo ""
+    echo "  2. Test manually:"
+    echo "     ./build/squeeze2diretta --squeezelite ./squeezelite/squeezelite -s <LMS_IP> --target <TARGET_NUM>"
+    echo ""
+    echo "  3. Or install the systemd service:"
+    echo "     ./install.sh  (choose option 4)"
     echo ""
 }
 
