@@ -611,7 +611,7 @@ bool DirettaSync::open(const AudioFormat& format) {
         int direttaBps = (acceptedBits == 32) ? 4 : (acceptedBits == 24) ? 3 : 2;
         int inputBps = (format.bitDepth == 32 || format.bitDepth == 24) ? 4 : 2;
 
-        configureRingPCM(format.sampleRate, format.channels, direttaBps, inputBps, format.isCompressed);
+        configureRingPCM(format.sampleRate, format.channels, direttaBps, inputBps);
     }
 
     unsigned int cycleTimeUs = calculateCycleTime(effectiveSampleRate, effectiveChannels, bitsPerSample);
@@ -866,7 +866,6 @@ void DirettaSync::fullReset() {
         m_isLowBitrate.store(false, std::memory_order_release);
         m_need24BitPack.store(false, std::memory_order_release);
         m_need16To32Upsample.store(false, std::memory_order_release);
-        m_need16To24Upsample.store(false, std::memory_order_release);
         m_bytesPerFrame.store(0, std::memory_order_release);
         m_framesPerBufferRemainder.store(0, std::memory_order_release);
         m_framesPerBufferAccumulator.store(0, std::memory_order_release);
@@ -1045,37 +1044,7 @@ void DirettaSync::configureSinkDSD(uint32_t dsdBitRate, int channels, const Audi
 // Ring Buffer Configuration
 //=============================================================================
 
-size_t DirettaSync::calculateAlignedPrefill(size_t bytesPerSecond, size_t bytesPerBuffer,
-                                            bool isDSD, bool isCompressed) {
-    // Determine target fill time based on format
-    size_t targetMs;
-    if (isDSD) {
-        targetMs = DirettaBuffer::PREFILL_MS_DSD;
-    } else if (isCompressed) {
-        targetMs = DirettaBuffer::PREFILL_MS_COMPRESSED;
-    } else {
-        targetMs = DirettaBuffer::PREFILL_MS_UNCOMPRESSED;
-    }
-
-    // Convert to bytes
-    size_t targetBytes = (bytesPerSecond * targetMs) / 1000;
-
-    // Calculate buffer count, rounding UP to ensure we meet the target
-    size_t targetBuffers = (targetBytes + bytesPerBuffer - 1) / bytesPerBuffer;
-
-    // Clamp to reasonable bounds
-    // Min: 8 buffers (ensures stability)
-    // Max: 1/4 of ring buffer capacity (leaves room for decode variance)
-    size_t ringSize = m_ringBuffer.size();
-    size_t maxBuffers = (ringSize > 0 && bytesPerBuffer > 0) ? ringSize / (4 * bytesPerBuffer) : 100;
-
-    targetBuffers = std::max(targetBuffers, size_t{8});
-    targetBuffers = std::min(targetBuffers, maxBuffers);
-
-    return targetBuffers;
-}
-
-void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int inputBps, bool isCompressed) {
+void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int inputBps) {
     std::lock_guard<std::mutex> lock(m_configMutex);
     ReconfigureGuard guard(*this);
 
@@ -1085,7 +1054,6 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     m_inputBytesPerSample.store(inputBps, std::memory_order_release);
     m_need24BitPack.store(direttaBps == 3 && inputBps == 4, std::memory_order_release);
     m_need16To32Upsample.store(direttaBps == 4 && inputBps == 2, std::memory_order_release);
-    m_need16To24Upsample.store(direttaBps == 3 && inputBps == 2, std::memory_order_release);
     m_isDsdMode.store(false, std::memory_order_release);
     m_needDsdBitReversal.store(false, std::memory_order_release);
     m_needDsdByteSwap.store(false, std::memory_order_release);
@@ -1104,44 +1072,53 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     ringSize = m_ringBuffer.size();
 
     int bytesPerFrame = channels * direttaBps;
-    int framesBase = rate / 1000;
-    int framesRemainder = rate % 1000;
-    m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
-    m_framesPerBufferRemainder.store(static_cast<uint32_t>(framesRemainder), std::memory_order_release);
-    m_framesPerBufferAccumulator.store(0, std::memory_order_release);
 
-    size_t bytesPerBuffer = static_cast<size_t>(framesBase) * bytesPerFrame;
-    m_bytesPerBuffer.store(static_cast<int>(bytesPerBuffer), std::memory_order_release);
+    // Calculate bytesPerBuffer to match DirettaCycleCalculator
+    // The cycle time is calculated as: cycleTimeUs = (efficientMTU / bytesPerSecond) * 1000000
+    // So bytesPerBuffer should equal efficientMTU (MTU - 24 bytes overhead)
+    constexpr int OVERHEAD = 48;  // IPv6 (40) + UDP (8)
+    int efficientMTU = static_cast<int>(m_effectiveMTU) - OVERHEAD;
+    if (efficientMTU < 64) efficientMTU = 1452;  // Fallback (1500 - 48)
 
-    // Aligned prefill: calculate as whole-buffer count for clean transitions
-    m_prefillTargetBuffers = calculateAlignedPrefill(bytesPerSecond, bytesPerBuffer, false, isCompressed);
+    // Align to frame boundary for clean audio
+    int framesPerBuffer = efficientMTU / bytesPerFrame;
+    int bytesPerBuffer = framesPerBuffer * bytesPerFrame;
 
-    // For non-integer sample rates (44.1kHz family), calculate exact byte count
-    // accounting for the frames remainder accumulator pattern
-    if (framesRemainder == 0) {
-        m_prefillTarget = m_prefillTargetBuffers * bytesPerBuffer;
+    // For low sample rates (<=96kHz), 1ms worth of data fits in MTU, use that instead
+    // This gives better timing resolution and matches original behavior
+    int bytesPerMs = (rate / 1000) * bytesPerFrame;
+    if (bytesPerMs <= efficientMTU) {
+        // Low sample rate: use 1ms buffers with drift correction for 44.1kHz family
+        int framesBase = rate / 1000;
+        int framesRemainder = rate % 1000;
+        bytesPerBuffer = framesBase * bytesPerFrame;
+
+        m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
+        m_framesPerBufferRemainder.store(static_cast<uint32_t>(framesRemainder), std::memory_order_release);
+        m_framesPerBufferAccumulator.store(0, std::memory_order_release);
+        m_bytesPerBuffer.store(bytesPerBuffer, std::memory_order_release);
+
+        DIRETTA_LOG("PCM buffer (1ms): " << bytesPerBuffer << " bytes (" << framesBase << " frames)");
     } else {
-        // Compute the sum of N callback sizes to stay on true boundaries
-        size_t totalBytes = 0;
-        uint32_t acc = 0;
-        for (size_t i = 0; i < m_prefillTargetBuffers; ++i) {
-            size_t bytesThis = bytesPerBuffer;
-            acc += static_cast<uint32_t>(framesRemainder);
-            if (acc >= 1000) {
-                acc -= 1000;
-                bytesThis += static_cast<size_t>(bytesPerFrame);
-            }
-            totalBytes += bytesThis;
-        }
-        m_prefillTarget = totalBytes;
+        // High sample rate: use MTU-sized buffers, no drift correction needed
+        // Cycle time and buffer size are matched via DirettaCycleCalculator
+        m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
+        m_framesPerBufferRemainder.store(0, std::memory_order_release);
+        m_framesPerBufferAccumulator.store(0, std::memory_order_release);
+        m_bytesPerBuffer.store(bytesPerBuffer, std::memory_order_release);
+
+        DIRETTA_LOG("PCM buffer (MTU): " << bytesPerBuffer << " bytes (" << framesPerBuffer << " frames)");
     }
+
+    m_prefillTarget = DirettaBuffer::calculatePrefill(bytesPerSecond, false,
+        m_isLowBitrate.load(std::memory_order_acquire));
+    m_prefillTarget = std::min(m_prefillTarget, ringSize / 4);
     m_prefillComplete = false;
 
     DIRETTA_LOG("Ring PCM: " << rate << "Hz " << channels << "ch "
                 << direttaBps << "bps, buffer=" << ringSize
-                << ", prefill=" << m_prefillTargetBuffers << " buffers ("
-                << m_prefillTarget << " bytes, "
-                << (isCompressed ? "compressed" : "uncompressed") << ")");
+                << ", bytesPerBuffer=" << bytesPerBuffer
+                << ", prefill=" << m_prefillTarget);
 }
 
 void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
@@ -1151,7 +1128,6 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_isDsdMode.store(true, std::memory_order_release);
     m_need24BitPack.store(false, std::memory_order_release);
     m_need16To32Upsample.store(false, std::memory_order_release);
-    m_need16To24Upsample.store(false, std::memory_order_release);
     m_channels.store(channels, std::memory_order_release);
     m_isLowBitrate.store(false, std::memory_order_release);
 
@@ -1166,23 +1142,38 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_ringBuffer.resize(ringSize, 0x69);  // DSD silence
     ringSize = m_ringBuffer.size();
 
-    uint32_t inputBytesPerMs = (byteRate / 1000) * channels;
-    size_t bytesPerBuffer = inputBytesPerMs;
-    bytesPerBuffer = ((bytesPerBuffer + (4 * channels - 1)) / (4 * channels)) * (4 * channels);
+    // Calculate bytesPerBuffer to match DirettaCycleCalculator
+    // Use efficientMTU (MTU - 24 bytes overhead) aligned to DSD block boundary
+    constexpr int OVERHEAD = 48;  // IPv6 (40) + UDP (8)
+    int efficientMTU = static_cast<int>(m_effectiveMTU) - OVERHEAD;
+    if (efficientMTU < 64) efficientMTU = 1452;  // Fallback (1500 - 48)
+
+    size_t blockSize = 4 * channels;
+    size_t bytesPerBuffer = (efficientMTU / blockSize) * blockSize;
     if (bytesPerBuffer < 64) bytesPerBuffer = 64;
+
+    // For low DSD rates where 1ms fits in MTU, use 1ms buffers
+    uint32_t inputBytesPerMs = (byteRate / 1000) * channels;
+    size_t bytesPerMsAligned = ((inputBytesPerMs + blockSize - 1) / blockSize) * blockSize;
+    if (bytesPerMsAligned <= static_cast<size_t>(efficientMTU)) {
+        bytesPerBuffer = bytesPerMsAligned;
+        DIRETTA_LOG("DSD buffer (1ms): " << bytesPerBuffer << " bytes");
+    } else {
+        DIRETTA_LOG("DSD buffer (MTU): " << bytesPerBuffer << " bytes");
+    }
+
     m_bytesPerBuffer.store(static_cast<int>(bytesPerBuffer), std::memory_order_release);
     m_bytesPerFrame.store(0, std::memory_order_release);
     m_framesPerBufferRemainder.store(0, std::memory_order_release);
     m_framesPerBufferAccumulator.store(0, std::memory_order_release);
 
-    // Aligned prefill: calculate as whole-buffer count for clean transitions
-    m_prefillTargetBuffers = calculateAlignedPrefill(bytesPerSecond, bytesPerBuffer, true, false);
-    m_prefillTarget = m_prefillTargetBuffers * bytesPerBuffer;
+    m_prefillTarget = DirettaBuffer::calculatePrefill(bytesPerSecond, true, false);
+    m_prefillTarget = std::min(m_prefillTarget, ringSize / 4);
     m_prefillComplete = false;
 
     DIRETTA_LOG("Ring DSD: byteRate=" << byteRate << " ch=" << channels
-                << " buffer=" << ringSize << " prefill=" << m_prefillTargetBuffers
-                << " buffers (" << m_prefillTarget << " bytes)");
+                << " buffer=" << ringSize << " bytesPerBuffer=" << bytesPerBuffer
+                << " prefill=" << m_prefillTarget);
 }
 
 //=============================================================================
@@ -1288,7 +1279,6 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
         m_cachedDsdMode = m_isDsdMode.load(std::memory_order_acquire);
         m_cachedPack24bit = m_need24BitPack.load(std::memory_order_acquire);
         m_cachedUpsample16to32 = m_need16To32Upsample.load(std::memory_order_acquire);
-        m_cachedUpsample16to24 = m_need16To24Upsample.load(std::memory_order_acquire);
         m_cachedChannels = m_channels.load(std::memory_order_acquire);
         m_cachedBytesPerSample = m_bytesPerSample.load(std::memory_order_acquire);
         m_cachedDsdConversionMode = m_dsdConversionMode.load(std::memory_order_acquire);
@@ -1299,7 +1289,6 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
     bool dsdMode = m_cachedDsdMode;
     bool pack24bit = m_cachedPack24bit;
     bool upsample16to32 = m_cachedUpsample16to32;
-    bool upsample16to24 = m_cachedUpsample16to24;
     int numChannels = m_cachedChannels;
     int bytesPerSample = m_cachedBytesPerSample;
 
@@ -1333,14 +1322,6 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
 
         written = m_ringBuffer.push16To32(data, totalBytes);
         formatLabel = "PCM16->32";
-
-    } else if (upsample16to24) {
-        // PCM 16->24 (sink only supports 24-bit, not 32-bit)
-        size_t bytesPerFrame = 2 * numChannels;
-        totalBytes = numSamples * bytesPerFrame;
-
-        written = m_ringBuffer.push16To24(data, totalBytes);
-        formatLabel = "PCM16->24";
 
     } else {
         // PCM direct copy
