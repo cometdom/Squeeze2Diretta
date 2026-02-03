@@ -798,6 +798,23 @@ SERVICE_EOF
     echo "    5. View logs:"
     echo "       sudo journalctl -u squeeze2diretta -f"
     echo ""
+
+    # Open configuration file for editing
+    echo ""
+    print_info "Opening configuration file for editing..."
+    echo "  Please configure LMS_SERVER and TARGET, then save and exit."
+    echo ""
+    sleep 2
+
+    # Use nano if available, fallback to vi
+    if command -v nano &> /dev/null; then
+        sudo nano "$CONFIG_FILE"
+    elif command -v vi &> /dev/null; then
+        sudo vi "$CONFIG_FILE"
+    else
+        print_warning "No editor found. Please edit manually:"
+        echo "  sudo nano $CONFIG_FILE"
+    fi
 }
 
 # =============================================================================
