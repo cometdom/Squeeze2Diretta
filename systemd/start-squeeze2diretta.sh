@@ -18,6 +18,8 @@ LMS_SERVER="${LMS_SERVER:-192.168.1.100}"
 TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
+DSD_FORMAT="${DSD_FORMAT:-u32be}"
+PAUSE_ON_START="${PAUSE_ON_START:-no}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 SQUEEZE2DIRETTA="$INSTALL_DIR/squeeze2diretta"
@@ -30,7 +32,15 @@ CMD="$CMD -s $LMS_SERVER"
 CMD="$CMD --target $TARGET"
 CMD="$CMD -n $PLAYER_NAME"
 CMD="$CMD -r $MAX_SAMPLE_RATE"
-# Note: DSD format (-D :u32be) is hardcoded in squeeze2diretta for Diretta compatibility
+
+# DSD format
+# dop = DoP mode (for Roon)
+# u32be/u32le = native DSD (for LMS)
+if [ "$DSD_FORMAT" = "dop" ]; then
+    CMD="$CMD -D"
+elif [ "$DSD_FORMAT" = "u32be" ] || [ "$DSD_FORMAT" = "u32le" ]; then
+    CMD="$CMD -D :$DSD_FORMAT"
+fi
 
 # Optional verbose mode
 if [ -n "$VERBOSE" ]; then
@@ -52,13 +62,35 @@ echo "  LMS Server:       $LMS_SERVER"
 echo "  Diretta Target:   $TARGET"
 echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
-echo "  DSD Format:       :u32be (hardcoded)"
+echo "  DSD Format:       $DSD_FORMAT"
+echo "  Pause on Start:   $PAUSE_ON_START"
 echo ""
 echo "Command:"
 echo "  $CMD"
 echo ""
 echo "════════════════════════════════════════════════════════"
 echo ""
+
+# Function to send pause command to LMS
+send_pause_command() {
+    # Wait for squeezelite to connect to LMS
+    sleep 5
+
+    # URL-encode the player name (replace spaces with %20)
+    ENCODED_NAME=$(echo "$PLAYER_NAME" | sed 's/ /%20/g')
+
+    # Send pause command via LMS CLI (port 9090)
+    # Format: <playerid> pause 1
+    echo "$ENCODED_NAME pause 1" | nc -w 2 "$LMS_SERVER" 9090 > /dev/null 2>&1 || true
+
+    echo "[PAUSE_ON_START] Sent pause command to LMS for player: $PLAYER_NAME"
+}
+
+# If PAUSE_ON_START is enabled, run pause command in background
+if [ "$PAUSE_ON_START" = "yes" ] || [ "$PAUSE_ON_START" = "true" ] || [ "$PAUSE_ON_START" = "1" ]; then
+    echo "[PAUSE_ON_START] Will pause playback after connection..."
+    send_pause_command &
+fi
 
 # Execute
 exec $CMD

@@ -555,6 +555,7 @@ TARGET="${TARGET:-1}"
 PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
 DSD_FORMAT="${DSD_FORMAT:-u32be}"
+PAUSE_ON_START="${PAUSE_ON_START:-no}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 
@@ -601,12 +602,30 @@ echo "  Diretta Target:   $TARGET"
 echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
 echo "  DSD Format:       $DSD_FORMAT"
+echo "  Pause on Start:   $PAUSE_ON_START"
 echo ""
 echo "Command:"
 echo "  $CMD"
 echo ""
 echo "════════════════════════════════════════════════════════"
 echo ""
+
+# Function to send pause command to LMS
+send_pause_command() {
+    # Wait for squeezelite to connect to LMS
+    sleep 5
+    # URL-encode the player name (replace spaces with %20)
+    ENCODED_NAME=$(echo "$PLAYER_NAME" | sed 's/ /%20/g')
+    # Send pause command via LMS CLI (port 9090)
+    echo "$ENCODED_NAME pause 1" | nc -w 2 "$LMS_SERVER" 9090 > /dev/null 2>&1 || true
+    echo "[PAUSE_ON_START] Sent pause command to LMS for player: $PLAYER_NAME"
+}
+
+# If PAUSE_ON_START is enabled, run pause command in background
+if [ "$PAUSE_ON_START" = "yes" ] || [ "$PAUSE_ON_START" = "true" ] || [ "$PAUSE_ON_START" = "1" ]; then
+    echo "[PAUSE_ON_START] Will pause playback after connection..."
+    send_pause_command &
+fi
 
 # Execute
 exec $CMD
@@ -655,6 +674,12 @@ MAX_SAMPLE_RATE=768000
 #   u32le  = Native DSD Little Endian
 #   dop    = DSD over PCM (for Roon)
 DSD_FORMAT=u32be
+
+# Pause on start
+# Set to "yes" to pause playback when the service starts
+# This prevents music from auto-resuming after a reboot
+# Leave as "no" for normal LMS behavior (resume playback)
+PAUSE_ON_START=no
 
 # Verbose mode
 # Set to "-v" for debug output, leave empty for normal operation

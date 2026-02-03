@@ -385,6 +385,7 @@ sudo nano /etc/squeeze2diretta.conf
 | `PLAYER_NAME` | Name shown in LMS web interface | `squeeze2diretta` |
 | `MAX_SAMPLE_RATE` | Maximum sample rate in Hz | `768000` |
 | `DSD_FORMAT` | DSD output format (see below) | `u32be` |
+| `PAUSE_ON_START` | Pause playback when service starts (prevents auto-resume) | `no` |
 | `VERBOSE` | Set to `-v` for debug output | (empty) |
 
 ### DSD Format: LMS vs Roon
