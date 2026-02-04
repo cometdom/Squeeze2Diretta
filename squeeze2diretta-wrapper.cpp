@@ -716,7 +716,7 @@ int main(int argc, char* argv[]) {
                 if (dsd_format == DSDFormatType::DOP) {
                     std::cout << "[DSD Format] DoP→DSD conversion, output as DFF (MSB)" << std::endl;
                 } else {
-                    std::cout << "[DSD Format] Set to DFF (MSB) - we handle byte swap" << std::endl;
+                    std::cout << "[DSD Format] Set to DFF (MSB) - byte-swap in de-interleave" << std::endl;
                 }
             }
 
@@ -838,7 +838,7 @@ int main(int argc, char* argv[]) {
 
                         } else if (format.isDSD && (dsd_format == DSDFormatType::U32_BE ||
                                                      dsd_format == DSDFormatType::U32_LE)) {
-                            // Native DSD: interleaved → planar conversion
+                            // Native DSD: interleaved → planar with byte-swap
                             if (burst_planar_buffer.size() < static_cast<size_t>(bytes_read)) {
                                 burst_planar_buffer.resize(bytes_read);
                             }
@@ -849,14 +849,15 @@ int main(int argc, char* argv[]) {
                                 size_t dst_offset_L = frame * 4;
                                 size_t dst_offset_R = bytes_per_channel + frame * 4;
 
-                                burst_planar_buffer[dst_offset_L + 0] = buffer[src_offset + 0];
-                                burst_planar_buffer[dst_offset_L + 1] = buffer[src_offset + 1];
-                                burst_planar_buffer[dst_offset_L + 2] = buffer[src_offset + 2];
-                                burst_planar_buffer[dst_offset_L + 3] = buffer[src_offset + 3];
-                                burst_planar_buffer[dst_offset_R + 0] = buffer[src_offset + 4];
-                                burst_planar_buffer[dst_offset_R + 1] = buffer[src_offset + 5];
-                                burst_planar_buffer[dst_offset_R + 2] = buffer[src_offset + 6];
-                                burst_planar_buffer[dst_offset_R + 3] = buffer[src_offset + 7];
+                                // Byte-swap: Squeezelite stdout writes LE memory order
+                                burst_planar_buffer[dst_offset_L + 0] = buffer[src_offset + 3];
+                                burst_planar_buffer[dst_offset_L + 1] = buffer[src_offset + 2];
+                                burst_planar_buffer[dst_offset_L + 2] = buffer[src_offset + 1];
+                                burst_planar_buffer[dst_offset_L + 3] = buffer[src_offset + 0];
+                                burst_planar_buffer[dst_offset_R + 0] = buffer[src_offset + 7];
+                                burst_planar_buffer[dst_offset_R + 1] = buffer[src_offset + 6];
+                                burst_planar_buffer[dst_offset_R + 2] = buffer[src_offset + 5];
+                                burst_planar_buffer[dst_offset_R + 3] = buffer[src_offset + 4];
                             }
 
                             num_samples = (static_cast<size_t>(bytes_read) * 8) / format.channels;
@@ -1044,24 +1045,27 @@ int main(int argc, char* argv[]) {
             size_t bytes_per_channel = bytes_read / format.channels;
 
             // De-interleave: separate L and R channels
-            // Squeezelite -D :u32be outputs Big Endian, DAC expects MSB
-            // Just de-interleave, no byte swap needed
+            // Squeezelite's dsd.c packs DSD bytes into uint32_t with byte[0] at MSB (<<24).
+            // On a little-endian machine, this uint32_t is stored in memory as [LSB...MSB],
+            // and output_stdout.c writes it via S32_LE format (memcpy), preserving LE order.
+            // So on the pipe: byte[0]=last DSD byte, byte[3]=first DSD byte.
+            // We must byte-swap to restore correct temporal order (first DSD byte first).
             for (size_t frame = 0; frame < num_frames; frame++) {
                 size_t src_offset = frame * bytes_per_frame;
                 size_t dst_offset_L = frame * 4;  // 4 bytes per DSD group
                 size_t dst_offset_R = bytes_per_channel + frame * 4;
 
-                // Copy L channel (no byte swap - keep Big Endian)
-                planar_buffer[dst_offset_L + 0] = buffer[src_offset + 0];
-                planar_buffer[dst_offset_L + 1] = buffer[src_offset + 1];
-                planar_buffer[dst_offset_L + 2] = buffer[src_offset + 2];
-                planar_buffer[dst_offset_L + 3] = buffer[src_offset + 3];
+                // L channel: byte-swap from LE pipe order to correct temporal order
+                planar_buffer[dst_offset_L + 0] = buffer[src_offset + 3];
+                planar_buffer[dst_offset_L + 1] = buffer[src_offset + 2];
+                planar_buffer[dst_offset_L + 2] = buffer[src_offset + 1];
+                planar_buffer[dst_offset_L + 3] = buffer[src_offset + 0];
 
-                // Copy R channel (no byte swap)
-                planar_buffer[dst_offset_R + 0] = buffer[src_offset + 4];
-                planar_buffer[dst_offset_R + 1] = buffer[src_offset + 5];
-                planar_buffer[dst_offset_R + 2] = buffer[src_offset + 6];
-                planar_buffer[dst_offset_R + 3] = buffer[src_offset + 7];
+                // R channel: byte-swap
+                planar_buffer[dst_offset_R + 0] = buffer[src_offset + 7];
+                planar_buffer[dst_offset_R + 1] = buffer[src_offset + 6];
+                planar_buffer[dst_offset_R + 2] = buffer[src_offset + 5];
+                planar_buffer[dst_offset_R + 3] = buffer[src_offset + 4];
             }
 
             // Debug: Show before/after conversion for first packet with real data
