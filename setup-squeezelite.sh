@@ -42,16 +42,16 @@ install_dependencies() {
             $SUDO apt update
             $SUDO apt install -y build-essential libasound2-dev libflac-dev \
                 libvorbis-dev libmad0-dev libmpg123-dev libopus-dev \
-                libsoxr-dev libssl-dev git
+                libsoxr-dev libssl-dev git patch
             ;;
         fedora|rhel|centos)
             $SUDO dnf install -y gcc make alsa-lib-devel flac-devel \
                 libvorbis-devel libmad-devel mpg123-devel opus-devel \
-                soxr-devel openssl-devel git
+                soxr-devel openssl-devel git patch
             ;;
         arch|manjaro)
             $SUDO pacman -S --needed base-devel alsa-lib flac libvorbis \
-                libmad mpg123 opus soxr openssl git
+                libmad mpg123 opus soxr openssl git patch
             ;;
         *)
             echo -e "${RED}Unsupported OS: $OS${NC}"
@@ -60,6 +60,7 @@ install_dependencies() {
             echo "  - alsa-lib-devel"
             echo "  - libflac-dev, libvorbis-dev, libmad-dev, libmpg123-dev"
             echo "  - libopus-dev, libsoxr-dev, libssl-dev"
+            echo "  - patch"
             exit 1
             ;;
     esac
@@ -71,7 +72,7 @@ install_dependencies() {
 check_dependencies() {
     local missing=0
 
-    for cmd in gcc make git; do
+    for cmd in gcc make git patch; do
         if ! command -v $cmd &> /dev/null; then
             echo -e "${YELLOW}Missing: $cmd${NC}"
             missing=1
@@ -79,6 +80,33 @@ check_dependencies() {
     done
 
     return $missing
+}
+
+# FIX: Separate function for manual patching with proper error handling
+apply_manual_patch() {
+    echo -e "${GREEN}Applying manual patch to output_stdout.c...${NC}"
+
+    # Find the exact line with fwrite for stdout
+    if grep -q 'fwrite(buf, bytes_per_frame, buffill, stdout);' output_stdout.c; then
+        # Use sed to add fflush after the fwrite line
+        # Match the line and append fflush with same indentation
+        sed -i '/fwrite(buf, bytes_per_frame, buffill, stdout);/a\                        fflush(stdout);  // Force flush when stdout is redirected to pipe' output_stdout.c
+
+        if grep -q "fflush(stdout)" output_stdout.c; then
+            echo -e "${GREEN}Manual patch applied successfully${NC}"
+        else
+            echo -e "${RED}Failed to apply manual patch${NC}"
+            echo "Please manually edit output_stdout.c"
+            echo "Find the line: fwrite(buf, bytes_per_frame, buffill, stdout);"
+            echo "Add after it:  fflush(stdout);  // Force flush when stdout is redirected to pipe"
+            exit 1
+        fi
+    else
+        echo -e "${RED}Could not find the fwrite line to patch${NC}"
+        echo "The squeezelite source code may have changed."
+        echo "Please manually add fflush(stdout) after the stdout fwrite call."
+        exit 1
+    fi
 }
 
 # Main installation
@@ -101,15 +129,54 @@ main() {
         echo -e "${GREEN}All dependencies found${NC}"
     fi
 
-    # Clone squeezelite if not exists
-    if [ ! -d "squeezelite" ]; then
+    # FIX: Better handling of existing squeezelite directory
+    if [ -d "squeezelite" ]; then
+        # Check if it's a valid git repo with the required source file
+        if [ -d "squeezelite/.git" ] && [ -f "squeezelite/output_stdout.c" ]; then
+            echo -e "${YELLOW}squeezelite directory already exists${NC}"
+            read -p "Reset to clean state and rebuild? (y/n) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo -e "${GREEN}Resetting squeezelite to clean state...${NC}"
+                cd squeezelite
+                git fetch origin
+                git reset --hard origin/master
+                git clean -fd
+                cd "$SCRIPT_DIR"
+            else
+                echo -e "${YELLOW}Keeping existing directory${NC}"
+            fi
+        else
+            # Directory exists but is incomplete/corrupt
+            echo -e "${YELLOW}squeezelite directory exists but appears incomplete${NC}"
+            read -p "Remove and re-clone? (y/n) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo -e "${GREEN}Removing incomplete directory...${NC}"
+                rm -rf squeezelite
+                echo -e "${GREEN}Cloning squeezelite repository...${NC}"
+                git clone https://github.com/ralph-irving/squeezelite.git
+            else
+                echo -e "${RED}Cannot proceed with incomplete squeezelite directory${NC}"
+                echo "Please manually remove: $SCRIPT_DIR/squeezelite"
+                exit 1
+            fi
+        fi
+    else
         echo -e "${GREEN}Cloning squeezelite repository...${NC}"
         git clone https://github.com/ralph-irving/squeezelite.git
-    else
-        echo -e "${YELLOW}squeezelite directory already exists, skipping clone${NC}"
     fi
 
     cd squeezelite
+
+    # FIX: Verify output_stdout.c exists
+    if [ ! -f "output_stdout.c" ]; then
+        echo -e "${RED}ERROR: output_stdout.c not found!${NC}"
+        echo "The squeezelite repository may not have cloned correctly."
+        echo "Please remove the squeezelite directory and try again:"
+        echo "  rm -rf $SCRIPT_DIR/squeezelite"
+        exit 1
+    fi
 
     # Check if already patched
     if grep -q "fflush(stdout).*Force flush when stdout is redirected to pipe" output_stdout.c 2>/dev/null; then
@@ -117,29 +184,37 @@ main() {
     else
         echo -e "${GREEN}Applying stdout flush patch...${NC}"
 
-        # Try to apply patch file
-        if [ -f "../squeezelite-stdout-flush.patch" ]; then
-            if patch -p1 < ../squeezelite-stdout-flush.patch 2>/dev/null; then
-                echo -e "${GREEN}Patch applied successfully${NC}"
-            else
-                # Apply manually
-                echo -e "${YELLOW}Automatic patch failed, applying manually...${NC}"
+        # FIX: Check multiple possible patch file locations
+        PATCH_FILE=""
+        for path in \
+            "$SCRIPT_DIR/patches/squeezelite-stdout-flush.patch" \
+            "$SCRIPT_DIR/squeezelite-stdout-flush.patch" \
+            "../patches/squeezelite-stdout-flush.patch" \
+            "../squeezelite-stdout-flush.patch"; do
+            if [ -f "$path" ]; then
+                PATCH_FILE="$path"
+                break
+            fi
+        done
 
-                # Find the line with fwrite and add fflush after it
-                sed -i '/fwrite(buf, bytes_per_frame, buffill, stdout);/a\			fflush(stdout);  \/\/ Force flush when stdout is redirected to pipe' output_stdout.c
+        if [ -n "$PATCH_FILE" ]; then
+            echo -e "${GREEN}Found patch file: $PATCH_FILE${NC}"
 
-                if grep -q "fflush(stdout)" output_stdout.c; then
-                    echo -e "${GREEN}Manual patch applied successfully${NC}"
+            # FIX: Test if patch can be applied before actually applying
+            if patch --dry-run -p1 < "$PATCH_FILE" >/dev/null 2>&1; then
+                if patch -p1 < "$PATCH_FILE"; then
+                    echo -e "${GREEN}Patch applied successfully${NC}"
                 else
-                    echo -e "${RED}Failed to apply patch${NC}"
-                    echo "Please manually edit output_stdout.c and add this line after line 116:"
-                    echo "    fflush(stdout);  // Force flush when stdout is redirected to pipe"
+                    echo -e "${RED}Patch application failed${NC}"
                     exit 1
                 fi
+            else
+                echo -e "${YELLOW}Patch file format doesn't match, trying manual patch...${NC}"
+                apply_manual_patch
             fi
         else
-            echo -e "${RED}Patch file not found${NC}"
-            exit 1
+            echo -e "${YELLOW}No patch file found, applying manual patch...${NC}"
+            apply_manual_patch
         fi
     fi
 

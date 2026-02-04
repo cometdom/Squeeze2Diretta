@@ -502,8 +502,16 @@ bool DirettaSync::open(const AudioFormat& format) {
                 // DSD→PCM needs delay for clock domain switch
                 // DSD rate downgrade needs time to flush internal buffers
                 // G4: Scale delay with DSD rate - higher rates have deeper pipelines
+                // Also scale for high target PCM rates which need extra PLL settling time
                 // G1: Use interruptible wait for responsive shutdown
-                int resetDelayMs = 200 * std::max(1, dsdMultiplier);  // 200ms (DSD64) to 1600ms (DSD512)
+                int baseDelay = 200 * std::max(1, dsdMultiplier);  // 200ms (DSD64) to 1600ms (DSD512)
+                int pcmBonus = 0;
+                if (nowPCM && format.sampleRate >= 176400) {
+                    // Only apply PCM bonus when transitioning TO PCM (not DSD→DSD rate change)
+                    int pcmMultiplier = format.sampleRate / 44100;  // 1 for 44100, 8 for 352800
+                    pcmBonus = 100 * pcmMultiplier;  // Extra for high-rate PCM
+                }
+                int resetDelayMs = baseDelay + pcmBonus;
                 std::cout << "[DirettaSync] Waiting " << resetDelayMs
                           << "ms for target to reset..." << std::endl;
                 interruptibleWait(m_transitionMutex, m_transitionCv, m_transitionWakeup, resetDelayMs);
@@ -569,12 +577,84 @@ bool DirettaSync::open(const AudioFormat& format) {
 
                 // Fall through to full open path
             } else {
-                // Other format changes (PCM→DSD, bit depth change):
-                // use existing reopenForFormatChange()
-                std::cout << "[DirettaSync] Format change - reopen" << std::endl;
-                if (!reopenForFormatChange()) {
-                    std::cerr << "[DirettaSync] Failed to reopen for format change" << std::endl;
-                    return false;
+                // PCM→DSD (or bit depth change)
+                // Detect same-family high-rate transitions that need full reset
+                // The target's PLL gets stuck when transitioning within same clock family
+                // at high rates (e.g., PCM 352.8kHz → DSD512×44.1)
+
+                // Helper lambda to determine clock family (441 = 44.1kHz, 480 = 48kHz)
+                auto getClockFamily = [](uint32_t sampleRate) -> int {
+                    if (sampleRate % 44100 == 0) return 441;
+                    if (sampleRate % 48000 == 0) return 480;
+                    return 0;
+                };
+
+                int oldFamily = getClockFamily(m_previousFormat.sampleRate);
+                int newFamily = getClockFamily(format.sampleRate);
+                bool sameFamily = (oldFamily != 0 && oldFamily == newFamily);
+
+                // High-rate: PCM 176.4kHz+ (4fs) or DSD256+ (which corresponds to 4fs base)
+                bool oldIsHighRate = m_previousFormat.sampleRate >= 176400;  // Previous was high-rate PCM
+                bool newIsHighRate = format.sampleRate >= 11289600;  // DSD256×44.1 = 11,289,600
+
+                bool needsFullReset = sameFamily && (oldIsHighRate || newIsHighRate);
+
+                if (needsFullReset) {
+                    // Same clock family high-rate PCM→DSD transition
+                    // Full close/reopen required to reset target's PLL
+                    int dsdMultiplier = format.sampleRate / 2822400;  // Target DSD rate
+                    std::cout << "[DirettaSync] High-rate PCM->DSD" << (dsdMultiplier * 64)
+                              << " (same " << oldFamily << "Hz family) - full close/reopen" << std::endl;
+
+                    // Clear any pending silence requests
+                    m_silenceBuffersRemaining = 0;
+
+                    // Stop playback and disconnect
+                    stop();
+                    disconnect(true);
+
+                    // CRITICAL: Stop worker thread BEFORE closing SDK to prevent use-after-free
+                    m_running = false;
+                    {
+                        std::lock_guard<std::mutex> lock(m_workerMutex);
+                        if (m_workerThread.joinable()) {
+                            m_workerThread.join();
+                        }
+                    }
+
+                    // Now safe to close SDK - worker thread is stopped
+                    DIRETTA::Sync::close();
+
+                    m_open = false;
+                    m_playing = false;
+                    m_paused = false;
+
+                    // Delay for target to reset - scale with target DSD rate
+                    int resetDelayMs = 200 * std::max(1, dsdMultiplier);  // 200ms (DSD64) to 1600ms (DSD512)
+                    std::cout << "[DirettaSync] Waiting " << resetDelayMs
+                              << "ms for target to reset..." << std::endl;
+                    interruptibleWait(m_transitionMutex, m_transitionCv, m_transitionWakeup, resetDelayMs);
+
+                    // Reopen DIRETTA::Sync fresh
+                    ACQUA::Clock cycleTime = ACQUA::Clock::MicroSeconds(m_config.cycleTime);
+                    if (!DIRETTA::Sync::open(
+                            DIRETTA::Sync::THRED_MODE(m_config.threadMode),
+                            cycleTime, 0, "DirettaRenderer", 0x44525400,
+                            -1, -1, 0, DIRETTA::Sync::MSMODE_MS3)) {
+                        std::cerr << "[DirettaSync] Failed to re-open DIRETTA::Sync" << std::endl;
+                        return false;
+                    }
+                    std::cout << "[DirettaSync] DIRETTA::Sync reopened" << std::endl;
+
+                    // Fall through to full open path
+                } else {
+                    // Different clock family or low-rate: reopenForFormatChange() is sufficient
+                    // Cross-family transitions naturally reset the PLL
+                    std::cout << "[DirettaSync] Format change - reopen" << std::endl;
+                    if (!reopenForFormatChange()) {
+                        std::cerr << "[DirettaSync] Failed to reopen for format change" << std::endl;
+                        return false;
+                    }
                 }
             }
             needFullConnect = true;
@@ -611,7 +691,7 @@ bool DirettaSync::open(const AudioFormat& format) {
         int direttaBps = (acceptedBits == 32) ? 4 : (acceptedBits == 24) ? 3 : 2;
         int inputBps = (format.bitDepth == 32 || format.bitDepth == 24) ? 4 : 2;
 
-        configureRingPCM(format.sampleRate, format.channels, direttaBps, inputBps);
+        configureRingPCM(format.sampleRate, format.channels, direttaBps, inputBps, format.isCompressed);
     }
 
     unsigned int cycleTimeUs = calculateCycleTime(effectiveSampleRate, effectiveChannels, bitsPerSample);
@@ -729,30 +809,17 @@ void DirettaSync::close() {
     stop();
     disconnect(true);  // Wait for proper disconnection before returning
 
-    // SDK 148: Close SDK completely to allow clean reopen on next track
-    DIRETTA::Sync::close();
-    m_sdkOpen = false;
-
-    // Brief delay for target to process disconnect (like reopenForFormatChange)
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // Stop worker thread
-    m_running = false;
-    {
-        std::lock_guard<std::mutex> lock(m_workerMutex);
-        if (m_workerThread.joinable()) {
-            m_workerThread.join();
-        }
+    int waitCount = 0;
+    while (m_workerActive.load() && waitCount < 50) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        waitCount++;
     }
 
     m_open = false;
     m_playing = false;
     m_paused = false;
 
-    // Reset cached consumer generation to force reload on next getNewStream()
-    m_cachedConsumerGen = UINT32_MAX;
-
-    DIRETTA_LOG("Close() done (SDK closed)");
+    DIRETTA_LOG("Close() done");
 }
 
 void DirettaSync::release() {
@@ -788,11 +855,6 @@ void DirettaSync::release() {
 
     // Clear format state so next open() starts fresh
     m_hasPreviousFormat = false;
-
-    // v2.0.1 FIX: Reset cached consumer generation to force reload on next getNewStream()
-    // Without this, if m_consumerStateGen wraps around to match m_cachedConsumerGen,
-    // stale cached values could be used after SDK reopen
-    m_cachedConsumerGen = UINT32_MAX;  // Force mismatch on next getNewStream()
 }
 
 bool DirettaSync::reopenForFormatChange() {
@@ -866,15 +928,13 @@ void DirettaSync::fullReset() {
         m_isLowBitrate.store(false, std::memory_order_release);
         m_need24BitPack.store(false, std::memory_order_release);
         m_need16To32Upsample.store(false, std::memory_order_release);
+        m_need16To24Upsample.store(false, std::memory_order_release);
         m_bytesPerFrame.store(0, std::memory_order_release);
         m_framesPerBufferRemainder.store(0, std::memory_order_release);
         m_framesPerBufferAccumulator.store(0, std::memory_order_release);
 
         m_ringBuffer.clear();
     }
-
-    // v2.0.1 FIX: Reset cached consumer generation to force reload on next getNewStream()
-    m_cachedConsumerGen = UINT32_MAX;
 
     m_stopRequested = false;
 }
@@ -1044,7 +1104,37 @@ void DirettaSync::configureSinkDSD(uint32_t dsdBitRate, int channels, const Audi
 // Ring Buffer Configuration
 //=============================================================================
 
-void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int inputBps) {
+size_t DirettaSync::calculateAlignedPrefill(size_t bytesPerSecond, size_t bytesPerBuffer,
+                                            bool isDSD, bool isCompressed) {
+    // Determine target fill time based on format
+    size_t targetMs;
+    if (isDSD) {
+        targetMs = DirettaBuffer::PREFILL_MS_DSD;
+    } else if (isCompressed) {
+        targetMs = DirettaBuffer::PREFILL_MS_COMPRESSED;
+    } else {
+        targetMs = DirettaBuffer::PREFILL_MS_UNCOMPRESSED;
+    }
+
+    // Convert to bytes
+    size_t targetBytes = (bytesPerSecond * targetMs) / 1000;
+
+    // Calculate buffer count, rounding UP to ensure we meet the target
+    size_t targetBuffers = (targetBytes + bytesPerBuffer - 1) / bytesPerBuffer;
+
+    // Clamp to reasonable bounds
+    // Min: 8 buffers (ensures stability)
+    // Max: 1/4 of ring buffer capacity (leaves room for decode variance)
+    size_t ringSize = m_ringBuffer.size();
+    size_t maxBuffers = (ringSize > 0 && bytesPerBuffer > 0) ? ringSize / (4 * bytesPerBuffer) : 100;
+
+    targetBuffers = std::max(targetBuffers, size_t{8});
+    targetBuffers = std::min(targetBuffers, maxBuffers);
+
+    return targetBuffers;
+}
+
+void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int inputBps, bool isCompressed) {
     std::lock_guard<std::mutex> lock(m_configMutex);
     ReconfigureGuard guard(*this);
 
@@ -1054,6 +1144,7 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     m_inputBytesPerSample.store(inputBps, std::memory_order_release);
     m_need24BitPack.store(direttaBps == 3 && inputBps == 4, std::memory_order_release);
     m_need16To32Upsample.store(direttaBps == 4 && inputBps == 2, std::memory_order_release);
+    m_need16To24Upsample.store(direttaBps == 3 && inputBps == 2, std::memory_order_release);
     m_isDsdMode.store(false, std::memory_order_release);
     m_needDsdBitReversal.store(false, std::memory_order_release);
     m_needDsdByteSwap.store(false, std::memory_order_release);
@@ -1072,53 +1163,44 @@ void DirettaSync::configureRingPCM(int rate, int channels, int direttaBps, int i
     ringSize = m_ringBuffer.size();
 
     int bytesPerFrame = channels * direttaBps;
+    int framesBase = rate / 1000;
+    int framesRemainder = rate % 1000;
+    m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
+    m_framesPerBufferRemainder.store(static_cast<uint32_t>(framesRemainder), std::memory_order_release);
+    m_framesPerBufferAccumulator.store(0, std::memory_order_release);
 
-    // Calculate bytesPerBuffer to match DirettaCycleCalculator
-    // The cycle time is calculated as: cycleTimeUs = (efficientMTU / bytesPerSecond) * 1000000
-    // So bytesPerBuffer should equal efficientMTU (MTU - 24 bytes overhead)
-    constexpr int OVERHEAD = 48;  // IPv6 (40) + UDP (8)
-    int efficientMTU = static_cast<int>(m_effectiveMTU) - OVERHEAD;
-    if (efficientMTU < 64) efficientMTU = 1452;  // Fallback (1500 - 48)
+    size_t bytesPerBuffer = static_cast<size_t>(framesBase) * bytesPerFrame;
+    m_bytesPerBuffer.store(static_cast<int>(bytesPerBuffer), std::memory_order_release);
 
-    // Align to frame boundary for clean audio
-    int framesPerBuffer = efficientMTU / bytesPerFrame;
-    int bytesPerBuffer = framesPerBuffer * bytesPerFrame;
+    // Aligned prefill: calculate as whole-buffer count for clean transitions
+    m_prefillTargetBuffers = calculateAlignedPrefill(bytesPerSecond, bytesPerBuffer, false, isCompressed);
 
-    // For low sample rates (<=96kHz), 1ms worth of data fits in MTU, use that instead
-    // This gives better timing resolution and matches original behavior
-    int bytesPerMs = (rate / 1000) * bytesPerFrame;
-    if (bytesPerMs <= efficientMTU) {
-        // Low sample rate: use 1ms buffers with drift correction for 44.1kHz family
-        int framesBase = rate / 1000;
-        int framesRemainder = rate % 1000;
-        bytesPerBuffer = framesBase * bytesPerFrame;
-
-        m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
-        m_framesPerBufferRemainder.store(static_cast<uint32_t>(framesRemainder), std::memory_order_release);
-        m_framesPerBufferAccumulator.store(0, std::memory_order_release);
-        m_bytesPerBuffer.store(bytesPerBuffer, std::memory_order_release);
-
-        DIRETTA_LOG("PCM buffer (1ms): " << bytesPerBuffer << " bytes (" << framesBase << " frames)");
+    // For non-integer sample rates (44.1kHz family), calculate exact byte count
+    // accounting for the frames remainder accumulator pattern
+    if (framesRemainder == 0) {
+        m_prefillTarget = m_prefillTargetBuffers * bytesPerBuffer;
     } else {
-        // High sample rate: use MTU-sized buffers, no drift correction needed
-        // Cycle time and buffer size are matched via DirettaCycleCalculator
-        m_bytesPerFrame.store(bytesPerFrame, std::memory_order_release);
-        m_framesPerBufferRemainder.store(0, std::memory_order_release);
-        m_framesPerBufferAccumulator.store(0, std::memory_order_release);
-        m_bytesPerBuffer.store(bytesPerBuffer, std::memory_order_release);
-
-        DIRETTA_LOG("PCM buffer (MTU): " << bytesPerBuffer << " bytes (" << framesPerBuffer << " frames)");
+        // Compute the sum of N callback sizes to stay on true boundaries
+        size_t totalBytes = 0;
+        uint32_t acc = 0;
+        for (size_t i = 0; i < m_prefillTargetBuffers; ++i) {
+            size_t bytesThis = bytesPerBuffer;
+            acc += static_cast<uint32_t>(framesRemainder);
+            if (acc >= 1000) {
+                acc -= 1000;
+                bytesThis += static_cast<size_t>(bytesPerFrame);
+            }
+            totalBytes += bytesThis;
+        }
+        m_prefillTarget = totalBytes;
     }
-
-    m_prefillTarget = DirettaBuffer::calculatePrefill(bytesPerSecond, false,
-        m_isLowBitrate.load(std::memory_order_acquire));
-    m_prefillTarget = std::min(m_prefillTarget, ringSize / 4);
     m_prefillComplete = false;
 
     DIRETTA_LOG("Ring PCM: " << rate << "Hz " << channels << "ch "
                 << direttaBps << "bps, buffer=" << ringSize
-                << ", bytesPerBuffer=" << bytesPerBuffer
-                << ", prefill=" << m_prefillTarget);
+                << ", prefill=" << m_prefillTargetBuffers << " buffers ("
+                << m_prefillTarget << " bytes, "
+                << (isCompressed ? "compressed" : "uncompressed") << ")");
 }
 
 void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
@@ -1128,6 +1210,7 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_isDsdMode.store(true, std::memory_order_release);
     m_need24BitPack.store(false, std::memory_order_release);
     m_need16To32Upsample.store(false, std::memory_order_release);
+    m_need16To24Upsample.store(false, std::memory_order_release);
     m_channels.store(channels, std::memory_order_release);
     m_isLowBitrate.store(false, std::memory_order_release);
 
@@ -1142,38 +1225,23 @@ void DirettaSync::configureRingDSD(uint32_t byteRate, int channels) {
     m_ringBuffer.resize(ringSize, 0x69);  // DSD silence
     ringSize = m_ringBuffer.size();
 
-    // Calculate bytesPerBuffer to match DirettaCycleCalculator
-    // Use efficientMTU (MTU - 24 bytes overhead) aligned to DSD block boundary
-    constexpr int OVERHEAD = 48;  // IPv6 (40) + UDP (8)
-    int efficientMTU = static_cast<int>(m_effectiveMTU) - OVERHEAD;
-    if (efficientMTU < 64) efficientMTU = 1452;  // Fallback (1500 - 48)
-
-    size_t blockSize = 4 * channels;
-    size_t bytesPerBuffer = (efficientMTU / blockSize) * blockSize;
-    if (bytesPerBuffer < 64) bytesPerBuffer = 64;
-
-    // For low DSD rates where 1ms fits in MTU, use 1ms buffers
     uint32_t inputBytesPerMs = (byteRate / 1000) * channels;
-    size_t bytesPerMsAligned = ((inputBytesPerMs + blockSize - 1) / blockSize) * blockSize;
-    if (bytesPerMsAligned <= static_cast<size_t>(efficientMTU)) {
-        bytesPerBuffer = bytesPerMsAligned;
-        DIRETTA_LOG("DSD buffer (1ms): " << bytesPerBuffer << " bytes");
-    } else {
-        DIRETTA_LOG("DSD buffer (MTU): " << bytesPerBuffer << " bytes");
-    }
-
+    size_t bytesPerBuffer = inputBytesPerMs;
+    bytesPerBuffer = ((bytesPerBuffer + (4 * channels - 1)) / (4 * channels)) * (4 * channels);
+    if (bytesPerBuffer < 64) bytesPerBuffer = 64;
     m_bytesPerBuffer.store(static_cast<int>(bytesPerBuffer), std::memory_order_release);
     m_bytesPerFrame.store(0, std::memory_order_release);
     m_framesPerBufferRemainder.store(0, std::memory_order_release);
     m_framesPerBufferAccumulator.store(0, std::memory_order_release);
 
-    m_prefillTarget = DirettaBuffer::calculatePrefill(bytesPerSecond, true, false);
-    m_prefillTarget = std::min(m_prefillTarget, ringSize / 4);
+    // Aligned prefill: calculate as whole-buffer count for clean transitions
+    m_prefillTargetBuffers = calculateAlignedPrefill(bytesPerSecond, bytesPerBuffer, true, false);
+    m_prefillTarget = m_prefillTargetBuffers * bytesPerBuffer;
     m_prefillComplete = false;
 
     DIRETTA_LOG("Ring DSD: byteRate=" << byteRate << " ch=" << channels
-                << " buffer=" << ringSize << " bytesPerBuffer=" << bytesPerBuffer
-                << " prefill=" << m_prefillTarget);
+                << " buffer=" << ringSize << " prefill=" << m_prefillTargetBuffers
+                << " buffers (" << m_prefillTarget << " bytes)");
 }
 
 //=============================================================================
@@ -1279,6 +1347,7 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
         m_cachedDsdMode = m_isDsdMode.load(std::memory_order_acquire);
         m_cachedPack24bit = m_need24BitPack.load(std::memory_order_acquire);
         m_cachedUpsample16to32 = m_need16To32Upsample.load(std::memory_order_acquire);
+        m_cachedUpsample16to24 = m_need16To24Upsample.load(std::memory_order_acquire);
         m_cachedChannels = m_channels.load(std::memory_order_acquire);
         m_cachedBytesPerSample = m_bytesPerSample.load(std::memory_order_acquire);
         m_cachedDsdConversionMode = m_dsdConversionMode.load(std::memory_order_acquire);
@@ -1289,6 +1358,7 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
     bool dsdMode = m_cachedDsdMode;
     bool pack24bit = m_cachedPack24bit;
     bool upsample16to32 = m_cachedUpsample16to32;
+    bool upsample16to24 = m_cachedUpsample16to24;
     int numChannels = m_cachedChannels;
     int bytesPerSample = m_cachedBytesPerSample;
 
@@ -1322,6 +1392,14 @@ size_t DirettaSync::sendAudio(const uint8_t* data, size_t numSamples) {
 
         written = m_ringBuffer.push16To32(data, totalBytes);
         formatLabel = "PCM16->32";
+
+    } else if (upsample16to24) {
+        // PCM 16->24 (sink only supports 24-bit, not 32-bit)
+        size_t bytesPerFrame = 2 * numChannels;
+        totalBytes = numSamples * bytesPerFrame;
+
+        written = m_ringBuffer.push16To24(data, totalBytes);
+        formatLabel = "PCM16->24";
 
     } else {
         // PCM direct copy
@@ -1368,10 +1446,10 @@ float DirettaSync::getBufferLevel() const {
 //=============================================================================
 
 bool DirettaSync::getNewStream(diretta_stream& baseStream) {
-    // SDK 148 API: Application-managed buffer
-    // SDK 148 changed from getNewStream(Stream&) to getNewStream(diretta_stream&)
-    // The application must manage memory: allocate buffer, assign to Data.P and Size
-    // (Confirmed by Yu Harada: memory management is application's responsibility)
+    // SDK 148 WORKAROUND: Do NOT use DIRETTA::Stream class methods!
+    // After Stop→Play (track change), SDK 148's Stream objects are corrupted.
+    // Any method call (resize, get_16, etc.) causes segfault.
+    // Solution: Use our own persistent buffer and directly set diretta_stream fields.
 
     m_workerActive = true;
 
@@ -1447,6 +1525,17 @@ bool DirettaSync::getNewStream(diretta_stream& baseStream) {
 
     // Prefill not complete
     if (!m_prefillComplete.load(std::memory_order_acquire)) {
+        // Diagnostic: Log prefill progress periodically (only in verbose mode)
+        if (g_verbose) {
+            static int prefillLogCount = 0;
+            size_t avail = m_ringBuffer.getAvailable();
+            if (prefillLogCount++ % 50 == 0) {  // Log every 50th call (~100ms at typical rates)
+                float pct = (m_prefillTarget > 0) ? (100.0f * avail / m_prefillTarget) : 0.0f;
+                std::cout << "[Prefill] Waiting: " << avail << "/" << m_prefillTarget
+                          << " bytes (" << std::fixed << std::setprecision(1) << pct << "%)"
+                          << (currentIsDsd ? " [DSD]" : " [PCM]") << std::endl;
+            }
+        }
         std::memset(dest, currentSilenceByte, currentBytesPerBuffer);
         m_workerActive = false;
         return true;
@@ -1470,7 +1559,7 @@ bool DirettaSync::getNewStream(diretta_stream& baseStream) {
 
             // Calculate cycle time based on MTU and data rate
             // cycleTime = (efficientMTU / bytesPerSecond) in microseconds
-            int efficientMTU = static_cast<int>(m_effectiveMTU) - 24;  // Subtract overhead
+            int efficientMTU = static_cast<int>(m_effectiveMTU) - DirettaCycleCalculator::OVERHEAD;
             double bytesPerSecond = static_cast<double>(currentSampleRate) * 2 / 8.0;  // 2ch, 1bit
             double cycleTimeUs = (static_cast<double>(efficientMTU) / bytesPerSecond) * 1000000.0;
 
@@ -1513,7 +1602,7 @@ bool DirettaSync::getNewStream(diretta_stream& baseStream) {
         return true;
     }
 
-    // Pop from ring buffer directly into SDK stream
+    // Pop from ring buffer
     m_ringBuffer.pop(dest, currentBytesPerBuffer);
 
     // G1: Signal producer that space is now available

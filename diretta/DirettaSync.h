@@ -185,17 +185,24 @@ namespace DirettaRetry {
 //=============================================================================
 
 namespace DirettaBuffer {
-    constexpr float DSD_BUFFER_SECONDS = 2.0f;   // Increased for squeezelite continuous stream
-    constexpr float PCM_BUFFER_SECONDS = 2.0f;   // Increased for squeezelite continuous stream
+    constexpr float DSD_BUFFER_SECONDS = 0.8f;
+    constexpr float PCM_BUFFER_SECONDS = 0.3f;  // Was 1.0f - low latency
 
     constexpr size_t DSD_PREFILL_MS = 200;
-    constexpr size_t PCM_PREFILL_MS = 100;       // Increased for stability
-    constexpr size_t PCM_LOWRATE_PREFILL_MS = 150;
+    constexpr size_t PCM_PREFILL_MS = 30;       // Was 50 - faster start
+    constexpr size_t PCM_LOWRATE_PREFILL_MS = 100;
 
-    constexpr unsigned int DAC_STABILIZATION_MS = 50;    // Reduced
+    // Aligned prefill targets (for whole-buffer alignment)
+    // Compressed formats (FLAC, ALAC) have variable decode times - need more buffer
+    // Uncompressed formats (WAV, AIFF) have predictable timing - less buffer needed
+    constexpr size_t PREFILL_MS_COMPRESSED = 200;    // FLAC, ALAC
+    constexpr size_t PREFILL_MS_UNCOMPRESSED = 100;  // WAV, AIFF
+    constexpr size_t PREFILL_MS_DSD = 150;           // DSD (fixed)
+
+    constexpr unsigned int DAC_STABILIZATION_MS = 100;
     constexpr unsigned int ONLINE_WAIT_MS = 2000;
     constexpr unsigned int FORMAT_SWITCH_DELAY_MS = 800;
-    constexpr unsigned int POST_ONLINE_SILENCE_BUFFERS = 5;  // Reduced for faster start with squeezelite
+    constexpr unsigned int POST_ONLINE_SILENCE_BUFFERS = 20;  // Was 50 - reduced for faster start
 
     // UPnP push model needs larger buffers than MPD's pull model
     // 64KB = ~370ms floor at 44.1kHz/16-bit, negligible at higher rates
@@ -249,7 +256,7 @@ namespace DirettaBuffer {
 
 class DirettaCycleCalculator {
 public:
-    static constexpr int OVERHEAD = 48;  // IPv6 (40) + UDP (8)
+    static constexpr int OVERHEAD = 48;  // IPv6: 40 (IP header) + 8 (UDP header)
 
     explicit DirettaCycleCalculator(uint32_t mtu = 1500)
         : m_mtu(mtu), m_efficientMTU(mtu - OVERHEAD) {}
@@ -380,6 +387,24 @@ public:
     const AudioFormat& getFormat() const { return m_currentFormat; }
 
     /**
+     * @brief Check if prefill is complete (ring buffer has enough data to start playback)
+     * @return true if prefill threshold has been reached
+     *
+     * Used by wrapper to implement burst-fill after format transitions.
+     * Without burst-fill, push rate equals pull rate, causing equilibrium trap
+     * where prefill is never reached.
+     */
+    bool isPrefillComplete() const {
+        return m_prefillComplete.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Get the prefill target in bytes
+     * @return Number of bytes needed in ring buffer before playback starts
+     */
+    size_t getPrefillTarget() const { return m_prefillTarget; }
+
+    /**
      * @brief Set S24 pack mode hint for 24-bit audio
      *
      * Propagates alignment hint from TrackInfo to ring buffer for better
@@ -455,8 +480,10 @@ private:
 
     void configureSinkPCM(int rate, int channels, int inputBits, int& acceptedBits);
     void configureSinkDSD(uint32_t dsdBitRate, int channels, const AudioFormat& format);
-    void configureRingPCM(int rate, int channels, int direttaBps, int inputBps);
+    void configureRingPCM(int rate, int channels, int direttaBps, int inputBps, bool isCompressed);
     void configureRingDSD(uint32_t byteRate, int channels);
+    size_t calculateAlignedPrefill(size_t bytesPerSecond, size_t bytesPerBuffer,
+                                   bool isDSD, bool isCompressed);
     void beginReconfigure();
     void endReconfigure();
 
@@ -507,15 +534,6 @@ private:
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_draining{false};
     std::atomic<bool> m_workerActive{false};
-
-    // SDK 148 API: Application-managed buffer for getNewStream()
-    // SDK 148 changed getNewStream(Stream&) to getNewStream(diretta_stream&)
-    // The application is now responsible for memory management:
-    // - Allocate own buffer and assign to diretta_stream.Data.P
-    // - Set diretta_stream.Size to buffer size
-    // (Confirmed by Yu Harada: "If a segment fault occurs, there is a problem with how memory is managed")
-    std::vector<uint8_t> m_streamData;
-
     std::thread m_workerThread;
     std::mutex m_workerMutex;
     std::mutex m_configMutex;
@@ -537,6 +555,11 @@ private:
     // Ring buffer
     DirettaRingBuffer m_ringBuffer;
 
+    // SDK 148: Persistent stream buffer to bypass corrupted Stream class
+    // After Stop→Play, SDK 148's Stream objects are in corrupted state.
+    // We manage our own buffer and directly set diretta_stream.Data.P/Size fields.
+    std::vector<uint8_t> m_streamData;
+
     // Format parameters (atomic snapshot for audio thread)
     std::atomic<int> m_sampleRate{44100};
     std::atomic<int> m_channels{2};
@@ -548,6 +571,7 @@ private:
     std::atomic<uint32_t> m_framesPerBufferAccumulator{0};
     std::atomic<bool> m_need24BitPack{false};
     std::atomic<bool> m_need16To32Upsample{false};
+    std::atomic<bool> m_need16To24Upsample{false};
     std::atomic<bool> m_isDsdMode{false};
     std::atomic<bool> m_needDsdBitReversal{false};
     std::atomic<bool> m_needDsdByteSwap{false};  // For LITTLE endian targets
@@ -567,6 +591,7 @@ private:
     bool m_cachedDsdMode{false};
     bool m_cachedPack24bit{false};
     bool m_cachedUpsample16to32{false};
+    bool m_cachedUpsample16to24{false};
     int m_cachedChannels{2};
     int m_cachedBytesPerSample{2};
     DirettaRingBuffer::DSDConversionMode m_cachedDsdConversionMode{DirettaRingBuffer::DSDConversionMode::Passthrough};
@@ -585,7 +610,8 @@ private:
     uint32_t m_cachedFramesPerBufferRemainder{0};
 
     // Prefill and stabilization
-    size_t m_prefillTarget = 0;
+    size_t m_prefillTarget = 0;           // Prefill target in bytes
+    size_t m_prefillTargetBuffers = 0;    // Prefill target in whole buffer count
     std::atomic<bool> m_prefillComplete{false};
     std::atomic<bool> m_postOnlineDelayDone{false};
     std::atomic<int> m_silenceBuffersRemaining{0};

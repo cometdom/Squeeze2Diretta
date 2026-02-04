@@ -276,6 +276,12 @@ void monitor_squeezelite_stderr(int stderr_fd) {
     std::regex dsd_format_regex(R"(format:\s*(DOP|DSD_U32_BE|DSD_U32_LE))");  // Match native DSD format
     std::regex dop_contains_regex(R"(file contains DOP)");  // Match DoP from Roon/FLAC container
     std::regex pcm_codec_regex(R"(codec open: '[fpom]')");  // PCM codecs
+    // NEW: Parse dsd_decode line which contains BOTH format AND rate
+    // This arrives ~30ms earlier than "track start sample rate" for 44.1kHz family
+    // Example: "dsd_decode:821 DSD512 stream, format: DSD_U32_BE, rate: 705600Hz"
+    std::regex dsd_decode_regex(R"(dsd_decode:\d+\s+DSD\d+\s+stream,\s+format:\s*(DSD_U32_BE|DSD_U32_LE),\s+rate:\s*(\d+))");
+    // Example: "dsd_decode:821 DoP stream, format: DOP, rate: 176400Hz"
+    std::regex dop_decode_regex(R"(dsd_decode:\d+\s+DoP\s+stream,\s+format:\s*DOP,\s+rate:\s*(\d+))");
 
     while (running) {
         ssize_t bytes_read = read(stderr_fd, buffer, sizeof(buffer) - 1);
@@ -295,8 +301,44 @@ void monitor_squeezelite_stderr(int stderr_fd) {
 
             std::smatch match;
 
-            // Check for DSD format (DoP or native)
-            if (std::regex_search(line, match, dsd_format_regex)) {
+            // PRIORITY 1: Check for dsd_decode line which has BOTH format AND rate
+            // This triggers ~30ms earlier than waiting for "track start sample rate"
+            if (std::regex_search(line, match, dsd_decode_regex)) {
+                std::string format = match[1].str();
+                unsigned int rate = std::stoul(match[2].str());
+
+                if (g_verbose) {
+                    std::cout << "\n[DSD Decode] " << format << " at " << rate << "Hz (immediate trigger)" << std::endl;
+                }
+
+                // Store the specific DSD format type
+                if (format == "DSD_U32_BE") {
+                    g_dsd_format_type.store(static_cast<int>(DSDFormatType::U32_BE));
+                } else if (format == "DSD_U32_LE") {
+                    g_dsd_format_type.store(static_cast<int>(DSDFormatType::U32_LE));
+                }
+
+                g_is_dsd.store(true);
+                g_current_sample_rate.store(rate);
+                g_format_pending.store(false);  // No need to wait - we have everything
+                g_need_reopen.store(true);  // Trigger immediately
+            }
+            // Check for DoP decode line
+            else if (std::regex_search(line, match, dop_decode_regex)) {
+                unsigned int rate = std::stoul(match[1].str());
+
+                if (g_verbose) {
+                    std::cout << "\n[DoP Decode] at " << rate << "Hz (immediate trigger)" << std::endl;
+                }
+
+                g_dsd_format_type.store(static_cast<int>(DSDFormatType::DOP));
+                g_is_dsd.store(true);
+                g_current_sample_rate.store(rate);
+                g_format_pending.store(false);
+                g_need_reopen.store(true);
+            }
+            // FALLBACK: Check for DSD format (DoP or native) - old method
+            else if (std::regex_search(line, match, dsd_format_regex)) {
                 std::string format = match[1].str();
                 bool was_dsd = g_is_dsd.load();
                 if (!was_dsd) {
@@ -609,64 +651,57 @@ int main(int argc, char* argv[]) {
             }
             std::cout << std::endl;
 
-            // Send silence before closing to reduce click/pop during format transition
-            // This gives the DAC time to fade out gracefully
-            {
-                const size_t SILENCE_FRAMES = 1024;  // ~20ms at 48kHz
-                size_t silence_bytes = SILENCE_FRAMES * bytes_per_frame;
-                std::vector<uint8_t> silence_buffer(silence_bytes, 0);
+            // NOTE: Do NOT call close() here!
+            // DirettaSync::open() has sophisticated format change handling that
+            // properly handles DSD→PCM transitions (full SDK close/reopen).
+            // Calling close() first sets m_open=false, which bypasses that logic.
 
-                if (format.isDSD) {
-                    // For DSD: silence is 0x69 pattern (alternating 1s and 0s)
-                    std::fill(silence_buffer.begin(), silence_buffer.end(), 0x69);
-                }
+            // CRITICAL: Wait for squeezelite to complete its format transition
+            // The format change log arrives BEFORE all old-format data is flushed.
+            // For extreme transitions (DSD512↔high-rate PCM), we need to wait
+            // for squeezelite's internal buffers to drain to the pipe.
+            bool isExtremeTransition =
+                (format.isDSD && actual_rate >= 11289600 && !is_dsd) ||  // DSD256+ → PCM
+                (!format.isDSD && format.sampleRate >= 176400 && is_dsd) || // High PCM → DSD
+                (format.isDSD && !is_dsd && actual_rate >= 176400);  // DSD → High PCM
 
-                // More buffers when exiting DSD mode (DSD→PCM needs more fade-out)
-                int num_buffers = format.isDSD ? 8 : 5;
-                for (int i = 0; i < num_buffers; i++) {
-                    size_t silence_samples = format.isDSD ?
-                        (silence_bytes * 8) / format.channels : SILENCE_FRAMES;
-                    g_diretta->sendAudio(silence_buffer.data(), silence_samples);
-                }
-
-                // Longer delay when exiting DSD mode
-                int delay_ms = format.isDSD ? 80 : 50;
-                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+            if (isExtremeTransition) {
+                std::cout << "[Format Transition] Extreme transition detected - waiting for squeezelite flush..." << std::endl;
+                // Wait for squeezelite to flush its internal buffers
+                // Squeezelite has ~1-2 seconds of internal buffering
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
             }
 
-            // Close current Diretta connection
-            g_diretta->close();
-
-            // Additional delay after close for DAC to fully stop
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
-
-            // Drain only immediately available residual data (non-blocking)
-            // This discards old format data without cutting into new audio
+            // Drain residual data - wait for pipe to have data, then drain aggressively
             {
                 struct pollfd pfd;
                 pfd.fd = fifo_fd;
                 pfd.events = POLLIN;
 
-                std::vector<uint8_t> drain_buffer(8192);
+                std::vector<uint8_t> drain_buffer(16384);  // Larger drain buffer
                 size_t total_drained = 0;
+                size_t drain_limit = isExtremeTransition ? 262144 : 65536;  // 256KB for extreme, 64KB otherwise
 
-                // Only drain what's immediately available (no waiting)
-                while (true) {
-                    int ret = poll(&pfd, 1, 0);  // Non-blocking check
-                    if (ret > 0 && (pfd.revents & POLLIN)) {
-                        ssize_t drained = read(fifo_fd, drain_buffer.data(), drain_buffer.size());
-                        if (drained > 0) {
-                            total_drained += drained;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;  // No more data available
+                // For extreme transitions, do multiple drain rounds with small waits
+                int drain_rounds = isExtremeTransition ? 5 : 1;
+                for (int round = 0; round < drain_rounds && total_drained < drain_limit; round++) {
+                    if (round > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     }
 
-                    // Safety limit: don't drain more than 64KB
-                    if (total_drained > 65536) {
-                        break;
+                    // Drain what's available
+                    while (total_drained < drain_limit) {
+                        int ret = poll(&pfd, 1, 0);  // Non-blocking check
+                        if (ret > 0 && (pfd.revents & POLLIN)) {
+                            ssize_t drained = read(fifo_fd, drain_buffer.data(), drain_buffer.size());
+                            if (drained > 0) {
+                                total_drained += drained;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;  // No more data available
+                        }
                     }
                 }
 
@@ -711,7 +746,7 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
-            // Calculate new bytes per frame first (needed for silence buffer)
+            // Calculate new bytes per frame first
             size_t new_bytes_per_frame;
             if (is_dsd) {
                 new_bytes_per_frame = 4 * format.channels;  // 4 bytes * 2 ch = 8
@@ -719,36 +754,177 @@ int main(int argc, char* argv[]) {
                 new_bytes_per_frame = (format.bitDepth / 8) * format.channels;
             }
 
-            // Send minimal silence after opening to reduce click/pop
-            // Keep it short to avoid truncating the beginning of audio
-            {
-                const size_t SILENCE_FRAMES = 512;  // ~10ms at 48kHz
-                size_t silence_bytes = SILENCE_FRAMES * new_bytes_per_frame;
-                std::vector<uint8_t> silence_buffer(silence_bytes, 0);
-
-                if (format.isDSD) {
-                    // For DSD: silence is 0x69 pattern (alternating 1s and 0s)
-                    std::fill(silence_buffer.begin(), silence_buffer.end(), 0x69);
-                }
-
-                // Send just 2-3 buffers to stabilize DAC without cutting audio
-                int num_buffers = format.isDSD ? 3 : 2;
-                for (int i = 0; i < num_buffers; i++) {
-                    size_t silence_samples = format.isDSD ?
-                        (silence_bytes * 8) / format.channels : SILENCE_FRAMES;
-                    g_diretta->sendAudio(silence_buffer.data(), silence_samples);
-                }
-
-                // Short delay to let DAC stabilize
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            }
-
-            // Use the already calculated bytes per frame for buffer sizing
+            // Set up buffer parameters for burst-fill
             bytes_per_frame = new_bytes_per_frame;
             buffer_size = CHUNK_SIZE * bytes_per_frame;
             buffer.resize(buffer_size);
 
-            // Reset timing
+            // ================================================================
+            // BURST-FILL: Fill ring buffer until prefill is complete
+            // ================================================================
+            // This escapes the "equilibrium trap" where push rate equals pull rate,
+            // causing prefill to never be reached. By disabling rate limiting until
+            // prefill completes, we ensure the ring buffer fills faster than it drains.
+            //
+            // Without burst-fill: wrapper sends 12KB silence, prefill needs 4.5MB,
+            // push rate = pull rate → ring buffer level stays constant → silence forever
+            //
+            // With burst-fill: wrapper pushes data as fast as pipe provides it,
+            // ring buffer fills to prefill threshold, then normal playback begins.
+            // ================================================================
+
+            // Determine clock family for diagnostic purposes
+            int clockFamily = (actual_rate % 44100 == 0) ? 441 :
+                              (actual_rate % 48000 == 0) ? 480 : 0;
+
+            if (g_verbose) {
+                std::cout << "[Burst Fill] Starting prefill for " << (format.isDSD ? "DSD" : "PCM")
+                          << " at " << actual_rate << "Hz (x" << clockFamily << " family)..." << std::endl;
+                std::cout << "[Burst Fill] Prefill target: " << g_diretta->getPrefillTarget()
+                          << " bytes" << std::endl;
+                std::cout << "[Burst Fill] bytes_per_frame=" << bytes_per_frame
+                          << " buffer_size=" << buffer_size << std::endl;
+            }
+
+            // DIAGNOSTIC: Log first DSD packet details for comparison
+            bool first_dsd_packet_logged = false;
+
+            auto burst_start = std::chrono::steady_clock::now();
+            const auto burst_timeout = std::chrono::seconds(5);  // Safety timeout
+            size_t burst_bytes_sent = 0;
+            int burst_iterations = 0;
+            int silence_fills = 0;
+
+            // Planar buffer for DSD conversion during burst-fill
+            std::vector<uint8_t> burst_planar_buffer(buffer_size);
+
+            while (!g_diretta->isPrefillComplete() && running) {
+                burst_iterations++;
+
+                // Check timeout
+                auto elapsed = std::chrono::steady_clock::now() - burst_start;
+                if (elapsed > burst_timeout) {
+                    std::cerr << "[Burst Fill] WARNING: Prefill timeout after 5s. "
+                              << "Sent " << burst_bytes_sent << " bytes in "
+                              << burst_iterations << " iterations." << std::endl;
+                    break;
+                }
+
+                // Try to read data (with short timeout to stay responsive)
+                struct pollfd pfd = {fifo_fd, POLLIN, 0};
+                int ret = poll(&pfd, 1, 50);  // 50ms timeout
+
+                if (ret > 0 && (pfd.revents & POLLIN)) {
+                    ssize_t bytes_read = read(fifo_fd, buffer.data(), buffer_size);
+
+                    if (bytes_read > 0) {
+                        size_t num_frames = static_cast<size_t>(bytes_read) / bytes_per_frame;
+                        size_t num_samples;
+
+                        // Process and send based on format (same logic as main loop)
+                        if (format.isDSD && dsd_format == DSDFormatType::DOP) {
+                            // DoP → Native DSD conversion
+                            size_t dsd_bytes_per_frame = 2 * format.channels;
+                            size_t output_size = num_frames * dsd_bytes_per_frame;
+                            if (burst_planar_buffer.size() < output_size) {
+                                burst_planar_buffer.resize(output_size);
+                            }
+                            size_t bytes_per_channel = output_size / format.channels;
+
+                            for (size_t frame = 0; frame < num_frames; frame++) {
+                                size_t src_offset = frame * bytes_per_frame;
+                                size_t dst_offset_L = frame * 2;
+                                size_t dst_offset_R = bytes_per_channel + frame * 2;
+
+                                burst_planar_buffer[dst_offset_L + 0] = buffer[src_offset + 2];
+                                burst_planar_buffer[dst_offset_L + 1] = buffer[src_offset + 1];
+                                burst_planar_buffer[dst_offset_R + 0] = buffer[src_offset + 6];
+                                burst_planar_buffer[dst_offset_R + 1] = buffer[src_offset + 5];
+                            }
+
+                            num_samples = (output_size * 8) / format.channels;
+                            g_diretta->sendAudio(burst_planar_buffer.data(), num_samples);
+                            burst_bytes_sent += output_size;
+
+                        } else if (format.isDSD && (dsd_format == DSDFormatType::U32_BE ||
+                                                     dsd_format == DSDFormatType::U32_LE)) {
+                            // Native DSD: interleaved → planar conversion
+                            if (burst_planar_buffer.size() < static_cast<size_t>(bytes_read)) {
+                                burst_planar_buffer.resize(bytes_read);
+                            }
+                            size_t bytes_per_channel = bytes_read / format.channels;
+
+                            for (size_t frame = 0; frame < num_frames; frame++) {
+                                size_t src_offset = frame * bytes_per_frame;
+                                size_t dst_offset_L = frame * 4;
+                                size_t dst_offset_R = bytes_per_channel + frame * 4;
+
+                                burst_planar_buffer[dst_offset_L + 0] = buffer[src_offset + 0];
+                                burst_planar_buffer[dst_offset_L + 1] = buffer[src_offset + 1];
+                                burst_planar_buffer[dst_offset_L + 2] = buffer[src_offset + 2];
+                                burst_planar_buffer[dst_offset_L + 3] = buffer[src_offset + 3];
+                                burst_planar_buffer[dst_offset_R + 0] = buffer[src_offset + 4];
+                                burst_planar_buffer[dst_offset_R + 1] = buffer[src_offset + 5];
+                                burst_planar_buffer[dst_offset_R + 2] = buffer[src_offset + 6];
+                                burst_planar_buffer[dst_offset_R + 3] = buffer[src_offset + 7];
+                            }
+
+                            num_samples = (static_cast<size_t>(bytes_read) * 8) / format.channels;
+
+                            // DIAGNOSTIC: Log first DSD packet for clock family comparison
+                            if (!first_dsd_packet_logged && g_verbose && buffer[0] != 0x69) {
+                                first_dsd_packet_logged = true;
+                                std::cout << "[DIAG] First DSD packet (x" << clockFamily << " family):" << std::endl;
+                                std::cout << "  num_frames=" << num_frames << " bytes_read=" << bytes_read
+                                          << " num_samples=" << num_samples << std::endl;
+                                std::cout << "  Raw input (first 32 bytes): ";
+                                for (int i = 0; i < 32 && i < bytes_read; i++) {
+                                    printf("%02x ", buffer[i]);
+                                }
+                                std::cout << std::endl;
+                            }
+
+                            g_diretta->sendAudio(burst_planar_buffer.data(), num_samples);
+                            burst_bytes_sent += bytes_read;
+
+                        } else {
+                            // PCM: send as-is
+                            num_samples = num_frames;
+                            g_diretta->sendAudio(buffer.data(), num_samples);
+                            burst_bytes_sent += bytes_read;
+                        }
+                    }
+                } else {
+                    // No data available - send silence to help reach prefill
+                    // This prevents deadlock if pipe is temporarily empty
+                    silence_fills++;
+                    const size_t SILENCE_CHUNK = 4096;
+                    std::vector<uint8_t> silence(SILENCE_CHUNK, format.isDSD ? 0x69 : 0x00);
+                    size_t silence_samples = format.isDSD ?
+                        (SILENCE_CHUNK * 8) / format.channels : SILENCE_CHUNK / bytes_per_frame;
+                    g_diretta->sendAudio(silence.data(), silence_samples);
+                    burst_bytes_sent += SILENCE_CHUNK;
+                }
+
+                // Log progress periodically (verbose mode only)
+                if (g_verbose && burst_iterations % 20 == 0) {
+                    float level = g_diretta->getBufferLevel() * 100.0f;
+                    std::cout << "[Burst Fill] Progress: " << std::fixed << std::setprecision(1)
+                              << level << "%, sent " << burst_bytes_sent << " bytes"
+                              << " (silence fills: " << silence_fills << ")" << std::endl;
+                }
+            }
+
+            // Report burst-fill results (verbose mode only)
+            if (g_verbose) {
+                auto burst_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - burst_start);
+                std::cout << "[Burst Fill] Complete: " << burst_bytes_sent << " bytes in "
+                          << burst_elapsed.count() << "ms (" << burst_iterations << " iterations, "
+                          << silence_fills << " silence fills)" << std::endl;
+            }
+
+            // Reset timing for rate-limited steady-state
             start_time = std::chrono::steady_clock::now();
             frames_sent = 0;
 

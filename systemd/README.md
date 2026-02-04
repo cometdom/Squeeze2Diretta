@@ -65,7 +65,7 @@ sudo nano /opt/squeeze2diretta/squeeze2diretta.conf
 **Optional settings:**
 - `PLAYER_NAME` → Name shown in LMS (default: squeeze2diretta)
 - `MAX_SAMPLE_RATE` → Maximum sample rate (default: 768000)
-- `DSD_FORMAT` → DSD output format (default: :u32be)
+- `DSD_FORMAT` → DSD output format: `u32be`, `u32le`, or `dop` (default: u32be)
 - `VERBOSE` → Set to `-v` for debug output
 
 ### 5. Find Your Diretta Target
@@ -140,7 +140,7 @@ TARGET=1                     # Diretta target number
 # OPTIONAL
 PLAYER_NAME=squeeze2diretta  # Player name in LMS
 MAX_SAMPLE_RATE=768000       # Max sample rate (Hz)
-DSD_FORMAT=:u32be            # DSD format (:u32be, :u32le, :dop)
+DSD_FORMAT=u32be             # DSD format (u32be, u32le, dop)
 VERBOSE=""                   # Set to "-v" for debug
 EXTRA_OPTS=""                # Additional options
 ```
@@ -209,7 +209,8 @@ sudo journalctl -u squeeze2diretta -n 50
 - Verify Diretta target is powered on
 
 **Issue: DSD plays as noise**
-- Ensure `DSD_FORMAT=:u32be` in config
+- Try different `DSD_FORMAT` values: `u32be`, `u32le`, or `dop`
+- For Roon, use `DSD_FORMAT=dop`
 - Check DAC supports native DSD
 
 ### Test Before Installing
