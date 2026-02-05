@@ -377,6 +377,7 @@ Found 2 Diretta target(s):
 --target, -t <index>    Select Diretta target by index (required)
 --list-targets          List available Diretta targets and exit
 --verbose, -v           Enable verbose debug output
+-a <bits>               PCM output bit depth: 16, 24, or 32 (default: 32)
 -W                      Enable WAV/AIFF header parsing in Squeezelite
 ```
 
@@ -410,6 +411,7 @@ sudo nano /opt/squeeze2diretta/squeeze2diretta.conf
 | `PLAYER_NAME` | Name shown in LMS web interface | `squeeze2diretta` |
 | `MAX_SAMPLE_RATE` | Maximum sample rate in Hz | `768000` |
 | `DSD_FORMAT` | DSD output format (see below) | `u32be` |
+| `SAMPLE_FORMAT` | PCM bit depth: 16, 24, or 32 (see below) | `32` |
 | `PAUSE_ON_START` | Pause playback when service starts (prevents auto-resume) | `no` |
 | `WAV_HEADER` | Read format from WAV/AIFF headers instead of server parameters | `no` |
 | `VERBOSE` | Set to `-v` for debug output | (empty) |
@@ -436,6 +438,18 @@ LMS can send native DSD directly to Squeezelite, providing the best quality path
 DSD_FORMAT=dop
 ```
 Roon's Squeezebox protocol emulation has limitations and sends DSD as DoP (DSD over PCM). squeeze2diretta automatically converts DoP back to native DSD for the Diretta Target.
+
+### PCM Sample Format (Bit Depth)
+
+The `SAMPLE_FORMAT` setting controls the PCM bit depth sent to the Diretta Target:
+
+| Value | Description |
+|-------|-------------|
+| `32` | 32-bit PCM (default, maximum quality) |
+| `24` | 24-bit PCM (for DACs that don't support 32-bit) |
+| `16` | 16-bit PCM (for legacy DACs) |
+
+Squeezelite always outputs 32-bit internally. When `SAMPLE_FORMAT` is set to 24 or 16, squeeze2diretta truncates the least significant bits before streaming to the Diretta Target.
 
 **After editing, restart the service:**
 ```bash

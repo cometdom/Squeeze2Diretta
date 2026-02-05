@@ -20,6 +20,7 @@ PLAYER_NAME="${PLAYER_NAME:-squeeze2diretta}"
 MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
 DSD_FORMAT="${DSD_FORMAT:-u32be}"
 PAUSE_ON_START="${PAUSE_ON_START:-no}"
+SAMPLE_FORMAT="${SAMPLE_FORMAT:-32}"
 WAV_HEADER="${WAV_HEADER:-no}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
@@ -41,6 +42,11 @@ if [ "$DSD_FORMAT" = "dop" ]; then
     CMD="$CMD -D"
 elif [ "$DSD_FORMAT" = "u32be" ] || [ "$DSD_FORMAT" = "u32le" ]; then
     CMD="$CMD -D :$DSD_FORMAT"
+fi
+
+# PCM sample format (bit depth)
+if [ "$SAMPLE_FORMAT" != "32" ] && [ -n "$SAMPLE_FORMAT" ]; then
+    CMD="$CMD -a $SAMPLE_FORMAT"
 fi
 
 # WAV/AIFF header parsing
@@ -69,6 +75,7 @@ echo "  Diretta Target:   $TARGET"
 echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
 echo "  DSD Format:       $DSD_FORMAT"
+echo "  Sample Format:    ${SAMPLE_FORMAT}-bit"
 echo "  WAV Header:       $WAV_HEADER"
 echo "  Pause on Start:   $PAUSE_ON_START"
 echo ""

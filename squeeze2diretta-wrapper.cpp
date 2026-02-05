@@ -78,7 +78,7 @@ struct Config {
     std::string model_name = "SqueezeLite";  // -M
     std::string codecs = "";             // -c
     std::string rates = "";              // -r
-    int sample_format = 24;              // -a (16, 24, or 32)
+    int sample_format = 32;              // -a (16, 24, or 32) - PCM output bit depth for Diretta
     std::string dsd_format = ":u32be";   // -D [format]: "dop" for DoP, ":u32be" (default) or ":u32le" for native DSD
     bool wav_header = false;             // -W: Read WAV/AIFF headers, ignore server parameters
 
@@ -267,6 +267,44 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
     return args;
 }
 
+// Convert S32_LE PCM samples to lower bit depth (S24_3LE or S16_LE)
+// Squeezelite always outputs S32_LE on stdout; this truncates the LSBs
+// for DACs that don't support 32-bit PCM.
+// Returns the number of output bytes written.
+static size_t convert_pcm_bit_depth(const uint8_t* input, uint8_t* output,
+                                     size_t num_frames, int channels,
+                                     int output_bits) {
+    const size_t total_samples = num_frames * channels;
+
+    if (output_bits == 24) {
+        // S32_LE → S24_3LE: drop byte 0 (LSB) from each 4-byte sample
+        size_t out_pos = 0;
+        for (size_t i = 0; i < total_samples; i++) {
+            const size_t src = i * 4;
+            output[out_pos]     = input[src + 1];
+            output[out_pos + 1] = input[src + 2];
+            output[out_pos + 2] = input[src + 3];
+            out_pos += 3;
+        }
+        return out_pos;
+    } else if (output_bits == 16) {
+        // S32_LE → S16_LE: keep bytes 2-3 (MSBs) from each 4-byte sample
+        size_t out_pos = 0;
+        for (size_t i = 0; i < total_samples; i++) {
+            const size_t src = i * 4;
+            output[out_pos]     = input[src + 2];
+            output[out_pos + 1] = input[src + 3];
+            out_pos += 2;
+        }
+        return out_pos;
+    }
+
+    // 32-bit: no conversion needed
+    size_t bytes = total_samples * 4;
+    std::memcpy(output, input, bytes);
+    return bytes;
+}
+
 // Monitor squeezelite stderr for sample rate changes
 void monitor_squeezelite_stderr(int stderr_fd) {
     char buffer[4096];
@@ -427,6 +465,14 @@ int main(int argc, char* argv[]) {
     // Parse arguments
     Config config = parse_args(argc, argv);
 
+    // Validate and store PCM output bit depth
+    const int output_bit_depth = config.sample_format;
+    if (output_bit_depth != 16 && output_bit_depth != 24 && output_bit_depth != 32) {
+        std::cerr << "Invalid sample format: " << output_bit_depth
+                  << " (must be 16, 24, or 32)" << std::endl;
+        return 1;
+    }
+
     // Set global verbose flag for DirettaSync logging
     g_verbose = config.verbose;
 
@@ -568,17 +614,21 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     // Setup audio format based on config
-    // IMPORTANT: squeezelite -o - outputs S32_LE (32-bit) regardless of -a setting
-    // Force 32-bit to match actual squeezelite STDOUT output
+    // Note: squeezelite -o - always outputs S32_LE (32-bit) on stdout.
+    // The wrapper reads 32-bit and converts to output_bit_depth before sending to Diretta.
     AudioFormat format;
     format.sampleRate = 44100;  // Default, use -r to restrict rates
-    format.bitDepth = 32;       // squeezelite STDOUT is always S32_LE
+    format.bitDepth = output_bit_depth;  // Output bit depth for Diretta DAC
     format.channels = 2;
     format.isDSD = false;
     format.isCompressed = false;
 
     std::cout << "Audio format: " << format.sampleRate << "Hz / "
-              << format.bitDepth << "-bit / " << format.channels << "ch" << std::endl;
+              << format.bitDepth << "-bit / " << format.channels << "ch";
+    if (output_bit_depth < 32) {
+        std::cout << " (converting from squeezelite 32-bit)";
+    }
+    std::cout << std::endl;
 
     // Open Diretta connection with format
     if (!g_diretta->open(format)) {
@@ -645,11 +695,16 @@ int main(int argc, char* argv[]) {
     // Read audio data from pipe and send to Diretta
     const size_t CHUNK_SIZE = 2048;  // frames per read (16384 bytes for DSD/PCM)
 
-    // Calculate bytes per frame - always PCM: (bitDepth/8) * channels
-    size_t bytes_per_frame = (format.bitDepth / 8) * format.channels;
+    // Squeezelite always outputs S32_LE (4 bytes per sample) regardless of -a setting
+    const size_t SQZ_BYTES_PER_SAMPLE = 4;
+    size_t bytes_per_frame = SQZ_BYTES_PER_SAMPLE * format.channels;  // Always 8 for stereo
     size_t buffer_size = CHUNK_SIZE * bytes_per_frame;
 
     std::vector<uint8_t> buffer(buffer_size);
+    std::vector<uint8_t> pcm_convert_buffer;
+    if (output_bit_depth < 32) {
+        pcm_convert_buffer.resize(buffer_size);  // Always enough (output <= input)
+    }
     uint64_t total_bytes = 0;
     uint64_t total_frames = 0;
 
@@ -668,7 +723,7 @@ int main(int argc, char* argv[]) {
 
             // Calculate actual DSD bit rate and format parameters
             unsigned int actual_rate = squeezelite_rate;
-            unsigned int bit_depth = 32;
+            unsigned int bit_depth = static_cast<unsigned int>(output_bit_depth);
 
             if (is_dsd) {
                 if (dsd_format == DSDFormatType::U32_BE || dsd_format == DSDFormatType::U32_LE) {
@@ -801,7 +856,8 @@ int main(int argc, char* argv[]) {
             if (is_dsd) {
                 new_bytes_per_frame = 4 * format.channels;  // 4 bytes * 2 ch = 8
             } else {
-                new_bytes_per_frame = (format.bitDepth / 8) * format.channels;
+                // Always read 32-bit from squeezelite, regardless of output bit depth
+                new_bytes_per_frame = SQZ_BYTES_PER_SAMPLE * format.channels;
             }
 
             // Set up buffer parameters for burst-fill
@@ -939,10 +995,18 @@ int main(int argc, char* argv[]) {
                             burst_bytes_sent += bytes_read;
 
                         } else {
-                            // PCM: send as-is
+                            // PCM: convert bit depth if needed, then send
                             num_samples = num_frames;
-                            g_diretta->sendAudio(buffer.data(), num_samples);
-                            burst_bytes_sent += bytes_read;
+                            if (output_bit_depth < 32) {
+                                size_t out_bytes = convert_pcm_bit_depth(
+                                    buffer.data(), burst_planar_buffer.data(),
+                                    num_frames, format.channels, output_bit_depth);
+                                g_diretta->sendAudio(burst_planar_buffer.data(), num_samples);
+                                burst_bytes_sent += out_bytes;
+                            } else {
+                                g_diretta->sendAudio(buffer.data(), num_samples);
+                                burst_bytes_sent += bytes_read;
+                            }
                         }
                     }
                 } else {
@@ -1154,8 +1218,14 @@ int main(int argc, char* argv[]) {
 
             written = g_diretta->sendAudio(planar_buffer.data(), num_samples);
         } else {
-            // PCM: send as-is
-            written = g_diretta->sendAudio(buffer.data(), num_samples);
+            // PCM: convert bit depth if needed, then send
+            if (output_bit_depth < 32) {
+                convert_pcm_bit_depth(buffer.data(), pcm_convert_buffer.data(),
+                                      num_frames, format.channels, output_bit_depth);
+                written = g_diretta->sendAudio(pcm_convert_buffer.data(), num_samples);
+            } else {
+                written = g_diretta->sendAudio(buffer.data(), num_samples);
+            }
         }
 
         // Debug first few writes

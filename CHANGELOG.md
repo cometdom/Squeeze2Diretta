@@ -47,6 +47,10 @@ in the new configuration file.
   - Suggested by Filippo (GentooPlayer)
 - **TARGET_MARCH** cmake option for cross-compilation (for Audiolinux/Piero)
 - **ARM64 page size detection** using `getconf PAGESIZE` (Filippo/GentooPlayer)
+- **`-a` option** (PCM bit depth) for DACs not supporting 32-bit
+  - Truncates squeezelite 32-bit output to 24-bit or 16-bit before streaming
+  - Configurable via command line (`-a 24`) or config file (`SAMPLE_FORMAT=24`)
+  - Default: 32 (no conversion)
 - **PAUSE_ON_START** option to pause playback on service start
 - **Auto-open config editor** after installation
 
