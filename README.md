@@ -406,7 +406,7 @@ sudo nano /opt/squeeze2diretta/squeeze2diretta.conf
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `LMS_SERVER` | IP address of your LMS server | `192.168.1.100` |
+| `LMS_SERVER` | IP address of your LMS server or Roonserver | `192.168.1.100` |
 | `TARGET` | Diretta target number (use `--list-targets` to find) | `1` |
 | `PLAYER_NAME` | Name shown in LMS web interface | `squeeze2diretta` |
 | `MAX_SAMPLE_RATE` | Maximum sample rate in Hz | `768000` |
