@@ -602,6 +602,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Squeezelite always outputs MSB-aligned S32_LE (24-bit data left-shifted by 8).
+    // Hint this so 32->24 bit packing extracts the correct bytes [1,2,3],
+    // even when LMS digital volume introduces non-zero noise in the LSB byte.
+    g_diretta->setS24PackModeHint(DirettaRingBuffer::S24PackMode::MsbAligned);
+
     std::cout << "Connected to Diretta DAC" << std::endl;
     std::cout << std::endl;
 
@@ -808,6 +813,11 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Failed to reopen Diretta with new format" << std::endl;
                 running = false;
                 break;
+            }
+
+            // For PCM: hint MSB-aligned packing (squeezelite left-shifts by 8)
+            if (!is_dsd) {
+                g_diretta->setS24PackModeHint(DirettaRingBuffer::S24PackMode::MsbAligned);
             }
 
             // Calculate new bytes per frame first

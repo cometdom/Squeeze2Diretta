@@ -1149,8 +1149,10 @@ private:
         } else if (allZeroLSB && allZeroMSB) {
             return S24PackMode::Deferred;    // Silence - can't determine yet
         }
-        // Both non-zero - ambiguous, default to LSB (more common)
-        return S24PackMode::LsbAligned;
+        // Both non-zero - ambiguous, defer to hint (if set) or timeout
+        // This happens when digital volume is applied to MSB-aligned data,
+        // introducing non-zero noise in the LSB byte
+        return S24PackMode::Deferred;
     }
 
     S24PackMode m_s24PackMode = S24PackMode::Unknown;

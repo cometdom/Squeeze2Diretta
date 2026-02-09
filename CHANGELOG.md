@@ -5,6 +5,25 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-02-09
+
+### Fixed
+- **24-bit PCM noise/distortion when LMS digital volume is not 100%**
+  - Root cause: squeezelite outputs MSB-aligned S32_LE (24-bit data left-shifted by 8).
+    When LMS applies digital volume, the multiplication introduces non-zero noise in
+    the LSB byte (byte[0]). The S24 auto-detection in DirettaRingBuffer saw both LSB
+    and MSB bytes as non-zero and incorrectly defaulted to LsbAligned, extracting
+    bytes [0,1,2] instead of [1,2,3]. This shifted every sample by one byte position,
+    producing loud noise.
+  - Affected: 24-bit sources (e.g., 96kHz/24-bit FLAC from Qobuz) with digital volume
+    control active. 16-bit sources were unaffected (16-bit left-shift by 16 keeps
+    byte[0] at zero even with volume applied).
+  - Fix: wrapper now hints `MsbAligned` to DirettaSync after each `open()` call.
+    `detectS24PackMode()` returns `Deferred` (instead of `LsbAligned`) for the
+    ambiguous both-non-zero case, allowing the hint to take precedence.
+
+---
+
 ## [1.0.1] - 2026-02-05
 
 ### UPGRADE NOTICE
@@ -133,5 +152,6 @@ in the new configuration file.
 
 ---
 
+[1.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.2
 [1.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.1
 [1.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.0

@@ -364,7 +364,22 @@ Found 2 Diretta target(s):
 1. Open LMS web interface (usually http://lms-server:9000)
 2. Go to Settings → Player → Audio
 3. You should see "squeeze2diretta" as a player
-4. Select it and start playing music!
+4. **Set volume to "Fixed at 100%"** (Settings → Player → Audio → Volume Control)
+5. Select it and start playing music!
+
+> **Important: Fixed Volume at 100%**
+>
+> squeeze2diretta requires the volume to be set to **"Fixed at 100%"**. Control the volume from your amplifier or DAC instead.
+>
+> - **LMS**: Settings → Player → Audio → Volume Control → "Fixed at 100%"
+> - **Roon**: Device Setup → Volume Control → "Fixed Volume"
+>
+> When digital volume is applied, the server modifies every audio sample before it reaches squeeze2diretta. This:
+> - **Breaks DSD playback** (the server converts DSD to PCM to apply volume)
+> - **Breaks bit-perfect PCM** (samples are altered by the volume multiplication)
+> - **Can cause noise on 24-bit sources** (interferes with internal format detection)
+>
+> This is not specific to squeeze2diretta - any bit-perfect audio path requires fixed volume.
 
 ---
 
