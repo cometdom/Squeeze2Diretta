@@ -234,16 +234,22 @@ setup_squeezelite() {
         # Manual setup if script not found
         print_info "setup-squeezelite.sh not found, setting up manually..."
 
+        local SQUEEZELITE_COMMIT="6d571de"
+
         if [ ! -d "$SQUEEZELITE_DIR" ]; then
             print_info "Cloning Squeezelite repository..."
             git clone https://github.com/ralph-irving/squeezelite.git "$SQUEEZELITE_DIR"
         else
             print_info "Updating Squeezelite repository..."
             cd "$SQUEEZELITE_DIR"
-            git pull
+            git fetch origin
         fi
 
         cd "$SQUEEZELITE_DIR"
+
+        # Pin to known-good commit (patch compatibility)
+        print_info "Checking out known-good commit ($SQUEEZELITE_COMMIT)..."
+        git checkout "$SQUEEZELITE_COMMIT" 2>/dev/null || true
 
         # Apply v2.0 format header patch if exists
         if [ -f "$SCRIPT_DIR/squeezelite-format-header.patch" ]; then

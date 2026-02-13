@@ -101,6 +101,9 @@ apply_manual_patch() {
     fi
 }
 
+# Known-good squeezelite commit (patch was generated against this version)
+SQUEEZELITE_COMMIT="6d571de"
+
 # Main installation
 main() {
     local SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -131,6 +134,8 @@ main() {
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 echo -e "${GREEN}Resetting squeezelite to clean state...${NC}"
                 cd squeezelite
+                git fetch origin
+                git checkout "$SQUEEZELITE_COMMIT"
                 git checkout -- .
                 git clean -fd
                 cd "$SCRIPT_DIR"
@@ -147,6 +152,7 @@ main() {
                 rm -rf squeezelite
                 echo -e "${GREEN}Cloning squeezelite repository...${NC}"
                 git clone https://github.com/ralph-irving/squeezelite.git
+                cd squeezelite && git checkout "$SQUEEZELITE_COMMIT" && cd "$SCRIPT_DIR"
             else
                 echo -e "${RED}Cannot proceed with incomplete squeezelite directory${NC}"
                 echo "Please manually remove: $SCRIPT_DIR/squeezelite"
@@ -159,6 +165,10 @@ main() {
     fi
 
     cd squeezelite
+
+    # Pin to known-good commit (patch compatibility)
+    echo -e "${GREEN}Checking out known-good commit ($SQUEEZELITE_COMMIT)...${NC}"
+    git checkout "$SQUEEZELITE_COMMIT" 2>/dev/null || true
 
     # FIX: Verify output_stdout.c exists
     if [ ! -f "output_stdout.c" ]; then
