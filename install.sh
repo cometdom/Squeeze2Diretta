@@ -13,7 +13,7 @@ set -e  # Exit on error
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="1.0.0"
+VERSION="2.0.0"
 
 # Auto-detect latest Diretta SDK version
 detect_latest_sdk() {
@@ -245,11 +245,13 @@ setup_squeezelite() {
 
         cd "$SQUEEZELITE_DIR"
 
-        # Apply stdout flush patch if exists
-        if [ -f "$SCRIPT_DIR/patches/squeezelite-stdout-flush.patch" ]; then
-            print_info "Applying stdout flush patch..."
-            git checkout . 2>/dev/null || true
-            patch -p1 < "$SCRIPT_DIR/patches/squeezelite-stdout-flush.patch" || print_warning "Patch may have already been applied"
+        # Apply v2.0 format header patch if exists
+        if [ -f "$SCRIPT_DIR/squeezelite-format-header.patch" ]; then
+            print_info "Applying v2.0 format header patch..."
+            git checkout -- . 2>/dev/null || true
+            git apply "$SCRIPT_DIR/squeezelite-format-header.patch" || \
+                patch -p1 < "$SCRIPT_DIR/squeezelite-format-header.patch" || \
+                print_warning "Patch may have already been applied"
         fi
 
         # Build with DSD support
