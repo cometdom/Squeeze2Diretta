@@ -546,8 +546,9 @@ int main(int argc, char* argv[]) {
     // Main loop: synchronous header-based format detection
     // ================================================================
     // The patched squeezelite writes a 16-byte "SQFH" header to stdout
-    // at each track boundary, followed by audio data. No stderr parsing
-    // or race conditions — the header is always in sync with the audio.
+    // only when the format changes (or for the first track). Same-format
+    // gapless transitions emit no header — audio flows uninterrupted.
+    // No stderr parsing or race conditions.
     // ================================================================
 
     PipeReader reader(fifo_fd);
