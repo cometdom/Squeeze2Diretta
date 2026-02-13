@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup script for squeezelite with stdout flush patch
+# Setup script for squeezelite with v2.0 format header patch
 # This script clones, patches, compiles and installs squeezelite for squeeze2diretta
 
 set -e  # Exit on error
@@ -273,8 +273,8 @@ main() {
     echo ""
     echo "Next steps:"
     echo "  1. Configure your LMS server and Diretta target"
-    echo "  2. Run: ./build/squeeze2diretta-wrapper --help"
-    echo "  3. Start streaming: ./build/squeeze2diretta-wrapper -s <LMS_IP> -t <DAC_IP>"
+    echo "  2. Run: ./build/squeeze2diretta --help"
+    echo "  3. Start streaming: sudo ./build/squeeze2diretta -s <LMS_IP> -t <target index>"
     echo ""
 }
 
