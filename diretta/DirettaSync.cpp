@@ -876,6 +876,12 @@ bool DirettaSync::reopenForFormatChange() {
     // Now safe to close SDK - worker thread is stopped
     DIRETTA::Sync::close();
 
+    // Reset state flags so subsequent open path starts fresh.
+    // Without this, PCM→DSD transitions retain stale state causing noise.
+    m_open = false;
+    m_playing = false;
+    m_paused = false;
+
     // G1: Use interruptible wait for responsive shutdown
     DIRETTA_LOG("Waiting " << m_config.formatSwitchDelayMs << "ms...");
     interruptibleWait(m_transitionMutex, m_transitionCv, m_transitionWakeup,
