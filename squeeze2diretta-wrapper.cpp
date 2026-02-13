@@ -643,11 +643,10 @@ int main(int argc, char* argv[]) {
             }
             std::cout << std::endl;
 
-            // Close current Diretta session if open
-            if (diretta_open) {
-                g_diretta->close();
-                diretta_open = false;
-            }
+            // Don't call close() before open() — let open() handle the transition
+            // internally. close() sets m_open=false which prevents open() from
+            // detecting the format change and doing the critical SDK close/reopen
+            // needed for sample rate changes (e.g., 48kHz → 44.1kHz).
 
             // Build AudioFormat for DirettaSync
             AudioFormat format;
