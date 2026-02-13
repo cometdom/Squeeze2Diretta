@@ -82,29 +82,22 @@ check_dependencies() {
     return $missing
 }
 
-# FIX: Separate function for manual patching with proper error handling
+# Manual patching fallback: copy the pre-patched output_stdout.c
 apply_manual_patch() {
-    echo -e "${GREEN}Applying manual patch to output_stdout.c...${NC}"
+    echo -e "${GREEN}Applying manual patch (copying pre-patched output_stdout.c)...${NC}"
 
-    # Find the exact line with fwrite for stdout
-    if grep -q 'fwrite(buf, bytes_per_frame, buffill, stdout);' output_stdout.c; then
-        # Use sed to add fflush after the fwrite line
-        # Match the line and append fflush with same indentation
-        sed -i '/fwrite(buf, bytes_per_frame, buffill, stdout);/a\                        fflush(stdout);  // Force flush when stdout is redirected to pipe' output_stdout.c
-
-        if grep -q "fflush(stdout)" output_stdout.c; then
-            echo -e "${GREEN}Manual patch applied successfully${NC}"
+    if [ -f "$SCRIPT_DIR/squeezelite/output_stdout.c" ]; then
+        # Use our pre-patched version from the squeeze2diretta repo
+        cp "$SCRIPT_DIR/squeezelite/output_stdout.c" output_stdout.c
+        if grep -q "sq_format_header" output_stdout.c; then
+            echo -e "${GREEN}Manual patch applied successfully (copied pre-patched file)${NC}"
         else
             echo -e "${RED}Failed to apply manual patch${NC}"
-            echo "Please manually edit output_stdout.c"
-            echo "Find the line: fwrite(buf, bytes_per_frame, buffill, stdout);"
-            echo "Add after it:  fflush(stdout);  // Force flush when stdout is redirected to pipe"
             exit 1
         fi
     else
-        echo -e "${RED}Could not find the fwrite line to patch${NC}"
-        echo "The squeezelite source code may have changed."
-        echo "Please manually add fflush(stdout) after the stdout fwrite call."
+        echo -e "${RED}Pre-patched output_stdout.c not found${NC}"
+        echo "The squeeze2diretta source tree may be incomplete."
         exit 1
     fi
 }
@@ -178,19 +171,19 @@ main() {
         exit 1
     fi
 
-    # Check if already patched
-    if grep -q "fflush(stdout).*Force flush when stdout is redirected to pipe" output_stdout.c 2>/dev/null; then
-        echo -e "${GREEN}Patch already applied${NC}"
+    # Check if already patched (v2.0 format header patch)
+    if grep -q "sq_format_header" output_stdout.c 2>/dev/null; then
+        echo -e "${GREEN}v2.0 format header patch already applied${NC}"
     else
-        echo -e "${GREEN}Applying stdout flush patch...${NC}"
+        echo -e "${GREEN}Applying v2.0 format header patch...${NC}"
 
-        # FIX: Check multiple possible patch file locations
+        # Check multiple possible patch file locations
         PATCH_FILE=""
         for path in \
-            "$SCRIPT_DIR/patches/squeezelite-stdout-flush.patch" \
-            "$SCRIPT_DIR/squeezelite-stdout-flush.patch" \
-            "../patches/squeezelite-stdout-flush.patch" \
-            "../squeezelite-stdout-flush.patch"; do
+            "$SCRIPT_DIR/patches/squeezelite-format-header.patch" \
+            "$SCRIPT_DIR/squeezelite-format-header.patch" \
+            "../patches/squeezelite-format-header.patch" \
+            "../squeezelite-format-header.patch"; do
             if [ -f "$path" ]; then
                 PATCH_FILE="$path"
                 break
@@ -200,7 +193,7 @@ main() {
         if [ -n "$PATCH_FILE" ]; then
             echo -e "${GREEN}Found patch file: $PATCH_FILE${NC}"
 
-            # FIX: Test if patch can be applied before actually applying
+            # Test if patch can be applied before actually applying
             if patch --dry-run -p1 < "$PATCH_FILE" >/dev/null 2>&1; then
                 if patch -p1 < "$PATCH_FILE"; then
                     echo -e "${GREEN}Patch applied successfully${NC}"

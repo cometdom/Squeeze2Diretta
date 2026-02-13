@@ -45,15 +45,16 @@ sudo ./squeeze2diretta --squeezelite /path/to/squeezelite -s <lms-ip> --target 1
 ## Architecture
 
 ```
-Data Flow:
+Data Flow (v2.0):
 LMS (network)
-  → Squeezelite (child process, decodes to stdout)
-    → squeeze2diretta-wrapper (main process)
-      → Detects format changes via stderr monitoring
-      → Converts DSD interleaved→planar, DoP→native
-      → DirettaSync (ring buffer + SDK)
-        → Diretta Target (UDP/Ethernet)
-          → DAC
+  → Squeezelite (patched, decodes to stdout with SQFH headers)
+    → stdout pipe: [SQFH header][audio data][SQFH header][audio data]...
+      → squeeze2diretta-wrapper (main process)
+        → Reads headers synchronously (no stderr parsing)
+        → Converts DSD interleaved→planar, DoP→native
+        → DirettaSync (ring buffer + SDK)
+          → Diretta Target (UDP/Ethernet)
+            → DAC
 ```
 
 **Key Components**:
@@ -66,39 +67,36 @@ LMS (network)
 | `diretta/globals.cpp/h` | Logging configuration |
 | `diretta/FastMemcpy*.h` | SIMD memory operations |
 
-## Critical: Format Change Handling
+## Format Change Handling (v2.0)
 
-### The Challenge
+### In-Band Format Signaling
 
-Format changes are detected **asynchronously** via Squeezelite's stderr logs:
+v2.0 uses a patched squeezelite that writes a **16-byte binary header** ("SQFH") to stdout
+at each track boundary. The wrapper reads this header **synchronously** from the pipe,
+eliminating the race condition of v1.x's async stderr log parsing.
+
+### Header Format (16 bytes)
+
+```c
+struct sq_format_header {
+    uint8_t  magic[4];       // "SQFH"
+    uint8_t  version;        // 1
+    uint8_t  channels;       // 2
+    uint8_t  bit_depth;      // PCM: 16/24/32, DSD: 1, DoP: 24
+    uint8_t  dsd_format;     // 0=PCM, 1=DOP, 2=DSD_U32_LE, 3=DSD_U32_BE
+    uint32_t sample_rate;    // LE, Hz
+    uint8_t  reserved[4];
+};
 ```
-[timestamp] track start sample rate: 352800
-[timestamp] format: DSD_U32_BE
-```
 
-This creates a **race condition**: by the time the log is detected, the pipe may already contain mixed old/new format data.
+### Flow
 
-### Current Flow (wrapper.cpp:571-738)
-
-1. Stderr monitor thread detects format change log
-2. Sets `g_need_reopen = true`
-3. Main loop drains pipe (up to 64KB)
-4. Calls `g_diretta->open(newFormat)`
-5. Continues reading expecting new format
-
-### Known Issue: DSD512 ↔ High-rate PCM
-
-Direct transitions between DSD512 (22.5MHz) and high-rate PCM (352.8kHz) fail silently. Going through 44.1kHz first works. This is due to:
-- Race condition between log detection and actual data transition
-- Target may need specific reset sequence for extreme rate jumps
-
-### Comparison with DirettaRendererUPnP-X
-
-| Aspect | squeeze2diretta | DirettaRendererUPnP-X |
-|--------|-----------------|----------------------|
-| Detection | Async (stderr logs) | Sync (audio callback) |
-| Timing | Log arrives AFTER data change | Callback has correct frame |
-| Data integrity | Race condition possible | Always synchronized |
+1. Wrapper blocks on `readExact(16)` — waits for header
+2. Validates "SQFH" magic
+3. Compares with current format — if changed, closes and reopens Diretta
+4. If same format (gapless), continues streaming without reopen
+5. Burst-fills ring buffer, then streams with rate limiting
+6. Peeks for next header before each audio read
 
 ## Code Style
 

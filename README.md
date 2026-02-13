@@ -1,4 +1,4 @@
-# squeeze2diretta v1.0.1
+# squeeze2diretta v2.0.0
 
 **Squeezelite to Diretta Bridge - Native DSD & Hi-Res PCM Streaming**
 
@@ -8,7 +8,7 @@
 
 ---
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![DSD](https://img.shields.io/badge/DSD-Native-green.svg)
 ![SDK](https://img.shields.io/badge/SDK-DIRETTA::Sync-orange.svg)
 
@@ -41,10 +41,10 @@ This tool uses the **Diretta Host SDK**, which is proprietary software by Yu Har
 ### What is This?
 
 This tool acts as a **wrapper** that:
-1. Launches **Squeezelite** with stdout output
-2. Reads PCM/DSD audio data from Squeezelite
-3. Streams it to a **Diretta Target** using the Diretta protocol
-4. Handles format changes dynamically (PCM ↔ DSD, different sample rates)
+1. Launches a **patched Squeezelite** with stdout output and in-band format headers
+2. Reads 16-byte format headers ("SQFH") and PCM/DSD audio data from the pipe
+3. Streams audio to a **Diretta Target** using the Diretta protocol
+4. Handles format changes synchronously — no race conditions (v2.0)
 
 ### Why Use This?
 
@@ -106,7 +106,7 @@ This tool acts as a **wrapper** that:
 
 ### DSD Handling
 - **Native DSD streaming**: Direct DSD bitstream (not DoP)
-- **Automatic format detection**: DSD_U32_BE, DSD_U32_LE from Squeezelite
+- **In-band format detection**: DSD_U32_BE, DSD_U32_LE via SQFH headers
 - **Dynamic conversion**:
   - Interleaved → Planar conversion
   - Big Endian → Little Endian byte swap

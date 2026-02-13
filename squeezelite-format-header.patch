@@ -1,0 +1,159 @@
+diff --git a/output_stdout.c b/output_stdout.c
+index 3fc61f5..af4b924 100644
+--- a/output_stdout.c
++++ b/output_stdout.c
+@@ -1,4 +1,4 @@
+-/* 
++/*
+  *  Squeezelite - lightweight headless squeezebox emulator
+  *
+  *  (c) Adrian Smith 2012-2015, triode1@btinternet.com
+@@ -8,7 +8,7 @@
+  * it under the terms of the GNU General Public License as published by
+  * the Free Software Foundation, either version 3 of the License, or
+  * (at your option) any later version.
+- * 
++ *
+  * This program is distributed in the hope that it will be useful,
+  * but WITHOUT ANY WARRANTY; without even the implied warranty of
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+@@ -19,7 +19,7 @@
+  *
+  */
+ 
+-// Stdout output
++// Stdout output with in-band format signaling for squeeze2diretta v2.0
+ 
+ #include "squeezelite.h"
+ 
+@@ -45,13 +45,74 @@ static u8_t *buf;
+ static unsigned buffill;
+ static int bytes_per_frame;
+ 
++// ================================================================
++// In-band format header for squeeze2diretta v2.0
++// Written to stdout at each track boundary before audio data.
++// The wrapper reads this 16-byte header to detect format changes
++// synchronously, eliminating the stderr log parsing race condition.
++// ================================================================
++struct __attribute__((packed)) sq_format_header {
++	u8_t  magic[4];       // "SQFH" (0x53, 0x51, 0x46, 0x48)
++	u8_t  version;        // Protocol version: 1
++	u8_t  channels;       // Number of channels (2 for stereo)
++	u8_t  bit_depth;      // PCM: 16/24/32, Native DSD: 1, DoP: 24
++	u8_t  dsd_format;     // 0=PCM, 1=DOP, 2=DSD_U32_LE, 3=DSD_U32_BE
++	u32_t sample_rate;    // Sample/frame rate in Hz (little-endian)
++	u8_t  reserved[4];    // Reserved for future use, zero-filled
++};
++
++#define SQ_HEADER_VERSION 1
++
++// Build format header from current output state (must be called under LOCK)
++static void build_format_header(struct sq_format_header *hdr) {
++	memset(hdr, 0, sizeof(*hdr));
++	memcpy(hdr->magic, "SQFH", 4);
++	hdr->version = SQ_HEADER_VERSION;
++	hdr->channels = 2;
++	hdr->sample_rate = output.current_sample_rate;
++
++#if DSD
++	switch (output.outfmt) {
++	case PCM:
++		hdr->dsd_format = 0;
++		break;
++	case DOP:
++	case DOP_S24_LE:
++	case DOP_S24_3LE:
++		hdr->dsd_format = 1;
++		hdr->bit_depth = 24;
++		break;
++	case DSD_U32_LE:
++		hdr->dsd_format = 2;
++		hdr->bit_depth = 1;
++		break;
++	case DSD_U32_BE:
++		hdr->dsd_format = 3;
++		hdr->bit_depth = 1;
++		break;
++	default:
++		hdr->dsd_format = 0;
++		break;
++	}
++	if (hdr->dsd_format == 0)
++#endif
++	{
++		switch (output.format) {
++		case S16_LE:  hdr->bit_depth = 16; break;
++		case S24_3LE: hdr->bit_depth = 24; break;
++		case S24_LE:  hdr->bit_depth = 24; break;
++		default:      hdr->bit_depth = 32; break;
++		}
++	}
++}
++
+ static int _stdout_write_frames(frames_t out_frames, bool silence, s32_t gainL, s32_t gainR, u8_t flags,
+ 								s32_t cross_gain_in, s32_t cross_gain_out, s32_t **cross_ptr) {
+ 
+ 	u8_t *obuf;
+ 
+ 	if (!silence) {
+-		
++
+ 		if (output.fade == FADE_ACTIVE && output.fade_dir == FADE_CROSS && *cross_ptr) {
+ 			_apply_cross(outputbuf, out_frames, cross_gain_in, cross_gain_out, cross_ptr);
+ 		}
+@@ -83,6 +144,8 @@ static int _stdout_write_frames(frames_t out_frames, bool silence, s32_t gainL,
+ }
+ 
+ static void *output_thread(void *vargp) {
++	bool first_track_seen = false;
++	bool header_emitted = false;
+ 
+ 	LOCK;
+ 
+@@ -110,13 +173,45 @@ static void *output_thread(void *vargp) {
+ 
+ 		_output_frames(FRAME_BLOCK);
+ 
++		// Detect new track boundary and prepare format header.
++		// output.track_started is set by _output_frames() when it processes
++		// a track boundary (output.c line 155). It is later cleared by
++		// slimproto after reporting to the server. Both accesses are
++		// protected by the outputbuf mutex, so we safely read it here.
++		bool header_pending = false;
++		struct sq_format_header hdr;
++
++		if (output.track_started && !header_emitted) {
++			first_track_seen = true;
++			build_format_header(&hdr);
++			header_pending = true;
++			header_emitted = true;
++		}
++		if (!output.track_started) {
++			header_emitted = false;
++		}
++
+ 		UNLOCK;
+ 
++		if (!first_track_seen) {
++			// Suppress pre-track silence so the first bytes on stdout
++			// are always a format header (wrapper expects "SQFH" magic)
++			buffill = 0;
++			continue;
++		}
++
++		// Write any remaining audio from the previous track
+ 		if (buffill) {
+ 			fwrite(buf, bytes_per_frame, buffill, stdout);
++			fflush(stdout);
+ 			buffill = 0;
+ 		}
+ 
++		// Write format header for the new track (after old-track audio)
++		if (header_pending) {
++			fwrite(&hdr, sizeof(hdr), 1, stdout);
++			fflush(stdout);
++		}
+ 	}
+ 
+ 	return 0;

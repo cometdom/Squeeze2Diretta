@@ -5,6 +5,46 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-02-13
+
+### UPGRADE NOTICE
+v2.0 requires a **new patched squeezelite** with in-band format headers.
+You MUST rebuild squeezelite using the updated `setup-squeezelite.sh`.
+The old `squeezelite-stdout-flush.patch` is replaced by `squeezelite-format-header.patch`.
+
+```bash
+# Remove old squeezelite and rebuild
+sudo systemctl stop squeeze2diretta
+rm -rf squeezelite/
+./setup-squeezelite.sh
+```
+
+### Changed
+- **In-band format signaling (breaking change)**: squeezelite now writes a 16-byte
+  binary header ("SQFH") to stdout at each track boundary, containing sample rate,
+  bit depth, DSD format, and channel count. The wrapper reads this header synchronously,
+  eliminating the stderr log parsing race condition that caused most v1.x bugs.
+- **Removed stderr monitoring**: the wrapper no longer parses squeezelite's stderr
+  logs for format detection. Squeezelite's stderr now passes through to the parent
+  process for debugging visibility.
+- **Simplified process setup**: only one pipe (stdout) instead of two (stdout + stderr).
+  No more stderr monitor thread, atomic globals, drain logic, or extreme transition delays.
+- **Gapless playback**: same-format track transitions are detected via header comparison
+  and handled without reopening Diretta (quick resume).
+- **Buffered pipe reader**: new `PipeReader` class with peek support for reliable
+  header detection mid-stream.
+
+### Removed
+- `monitor_squeezelite_stderr()` function and thread
+- `g_need_reopen`, `g_format_pending`, `g_is_dsd`, `g_dsd_format_type`, `g_current_sample_rate` atomics
+- Stderr pipe creation and redirect
+- Pre-format data drain logic
+- Extreme transition delays (PCM→DSD: 50ms, DSD→PCM: 80ms)
+- Initial "wait for format" spin-loop (replaced by blocking header read)
+- `squeezelite-stdout-flush.patch` (replaced by `squeezelite-format-header.patch`)
+
+---
+
 ## [1.0.2] - 2026-02-09
 
 ### Fixed
@@ -152,6 +192,7 @@ in the new configuration file.
 
 ---
 
+[2.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.0
 [1.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.2
 [1.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.1
 [1.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.0
