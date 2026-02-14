@@ -126,18 +126,34 @@ public:
     }
 
     // Read up to n bytes (non-exact). Returns bytes read, or <=0 on EOF/error.
+    // Stops before any embedded SQFH header to prevent consuming it as audio.
     ssize_t readUpTo(void* dst, size_t n) {
-        // Serve from buffer first
+        // Always go through internal buffer so we can scan for headers
         size_t avail = m_len - m_pos;
-        if (avail > 0) {
-            size_t chunk = std::min(avail, n);
-            memcpy(dst, m_buf + m_pos, chunk);
-            m_pos += chunk;
-            return static_cast<ssize_t>(chunk);
+        if (avail == 0) {
+            // Buffer empty — refill from pipe
+            ssize_t n_read = ::read(m_fd, m_buf, sizeof(m_buf));
+            if (n_read <= 0) return n_read;
+            m_pos = 0;
+            m_len = static_cast<size_t>(n_read);
+            avail = m_len;
         }
 
-        // Buffer empty — read directly from pipe
-        return ::read(m_fd, dst, n);
+        size_t chunk = std::min(avail, n);
+
+        // Scan for SQFH header embedded in the data.
+        // Start at byte 1 — byte 0 was already verified by peek() to not be 'S'QFH.
+        for (size_t i = 1; i + 3 <= chunk; i++) {
+            if (m_buf[m_pos + i] == 'S' && m_buf[m_pos + i + 1] == 'Q' &&
+                m_buf[m_pos + i + 2] == 'F' && m_buf[m_pos + i + 3] == 'H') {
+                chunk = i;  // Stop before the header
+                break;
+            }
+        }
+
+        memcpy(dst, m_buf + m_pos, chunk);
+        m_pos += chunk;
+        return static_cast<ssize_t>(chunk);
     }
 
 private:
