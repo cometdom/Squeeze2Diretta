@@ -806,6 +806,18 @@ int main(int argc, char* argv[]) {
             size_t num_frames = static_cast<size_t>(bytes_read) / bytes_per_frame;
             size_t num_samples;
 
+            // Consumer-driven flow control: wait for space BEFORE pushing
+            // push() is non-blocking and truncates if full — must wait first
+            // to avoid silently dropping audio data
+            if (g_diretta->isPrefillComplete()) {
+                while (running) {
+                    float level = g_diretta->getBufferLevel();
+                    if (level <= RING_HIGH_WATER) break;
+                    std::unique_lock<std::mutex> lock(g_diretta->getFlowMutex());
+                    g_diretta->waitForSpace(lock, std::chrono::milliseconds(50));
+                }
+            }
+
             // Process and send based on format
             if (current_format.isDSD && current_dsd_type == DSDFormatType::DOP) {
                 // DoP → Native DSD
@@ -835,17 +847,6 @@ int main(int argc, char* argv[]) {
 
             total_bytes += static_cast<uint64_t>(bytes_read);
             total_frames += num_frames;
-
-            // Consumer-driven flow control: wait when ring buffer is sufficiently full
-            // Replaces sleep_until() rate limiting — driven by Diretta SDK's actual
-            // consumption rate via condition variable, reducing jitter from ±2ms to ±50µs
-            if (g_diretta->isPrefillComplete()) {
-                float level = g_diretta->getBufferLevel();
-                if (level > RING_HIGH_WATER) {
-                    std::unique_lock<std::mutex> lock(g_diretta->getFlowMutex());
-                    g_diretta->waitForSpace(lock, std::chrono::milliseconds(50));
-                }
-            }
 
             // Progress (verbose, every ~10 seconds)
             if (g_verbose && total_frames % (rate_for_timing * 10) < (PIPE_BUF_SIZE / bytes_per_frame)) {
