@@ -1,7 +1,5 @@
-diff --git a/output_stdout.c b/output_stdout.c
-index 3fc61f5..0d52c41 100644
---- a/output_stdout.c
-+++ b/output_stdout.c
+--- a/output_stdout.c	2026-02-17 10:36:55.945982782 +0100
++++ b/output_stdout.c	2026-02-17 10:37:39.737991051 +0100
 @@ -1,4 +1,4 @@
 -/* 
 +/*
@@ -26,7 +24,7 @@ index 3fc61f5..0d52c41 100644
  
  #include "squeezelite.h"
  
-@@ -45,13 +45,75 @@ static u8_t *buf;
+@@ -45,13 +45,75 @@
  static unsigned buffill;
  static int bytes_per_frame;
  
@@ -103,7 +101,7 @@ index 3fc61f5..0d52c41 100644
  		if (output.fade == FADE_ACTIVE && output.fade_dir == FADE_CROSS && *cross_ptr) {
  			_apply_cross(outputbuf, out_frames, cross_gain_in, cross_gain_out, cross_ptr);
  		}
-@@ -83,6 +145,13 @@ static int _stdout_write_frames(frames_t out_frames, bool silence, s32_t gainL,
+@@ -83,6 +145,13 @@
  }
  
  static void *output_thread(void *vargp) {
@@ -117,7 +115,7 @@ index 3fc61f5..0d52c41 100644
  
  	LOCK;
  
-@@ -110,13 +179,57 @@ static void *output_thread(void *vargp) {
+@@ -110,13 +179,61 @@
  
  		_output_frames(FRAME_BLOCK);
  
@@ -157,6 +155,7 @@ index 3fc61f5..0d52c41 100644
 +			// Suppress pre-track silence so the first bytes on stdout
 +			// are always a format header (wrapper expects "SQFH" magic)
 +			buffill = 0;
++			usleep(10000);
 +			continue;
 +		}
 +
@@ -165,6 +164,9 @@ index 3fc61f5..0d52c41 100644
  			fwrite(buf, bytes_per_frame, buffill, stdout);
 +			fflush(stdout);
  			buffill = 0;
++		} else if (!header_pending) {
++			// No audio data and no header to emit — avoid busy-wait
++			usleep(10000);
  		}
  
 +		// Write format header for the new track (after old-track audio)

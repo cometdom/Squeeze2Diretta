@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(squeeze2diretta VERSION 2.0.0)
+project(squeeze2diretta VERSION 2.0.1)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -396,6 +396,16 @@ elseif(BASE_ARCH STREQUAL "aarch64")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=native")
         message(STATUS "SIMD: ARM64 native optimizations enabled")
     endif()
+endif()
+
+# ============================================
+# Production Build (NOLOG)
+# ============================================
+
+option(NOLOG "Disable SDK internal logging for production builds" OFF)
+if(NOLOG)
+    target_compile_definitions(squeeze2diretta PRIVATE NOLOG)
+    message(STATUS "NOLOG: SDK logging disabled (production build)")
 endif()
 
 # ============================================

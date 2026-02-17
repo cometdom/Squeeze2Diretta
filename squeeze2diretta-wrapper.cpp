@@ -38,7 +38,7 @@
 #include <sstream>
 
 // Version
-#define WRAPPER_VERSION "2.0.0"
+#define WRAPPER_VERSION "2.0.1"
 
 // ================================================================
 // In-band format header (must match squeezelite output_stdout.c)
@@ -181,6 +181,13 @@ void signal_handler(int sig) {
     }
 }
 
+// SIGUSR1 handler for runtime stats
+void stats_signal_handler(int /*sig*/) {
+    if (g_diretta) {
+        g_diretta->dumpStats();
+    }
+}
+
 // ================================================================
 // Configuration
 // ================================================================
@@ -205,6 +212,7 @@ struct Config {
 
     // Other
     bool verbose = false;
+    bool quiet = false;
     bool list_targets = false;
     std::string squeezelite_path = "squeezelite";
 };
@@ -237,7 +245,8 @@ void print_usage(const char* prog) {
     std::cout << "  --mtu <bytes>         MTU override (default: auto-detect)" << std::endl;
     std::cout << std::endl;
     std::cout << "Other:" << std::endl;
-    std::cout << "  -v                    Verbose output" << std::endl;
+    std::cout << "  -v                    Verbose output (debug level)" << std::endl;
+    std::cout << "  -q, --quiet           Quiet mode (warnings and errors only)" << std::endl;
     std::cout << "  -h, --help            Show this help" << std::endl;
     std::cout << "  --squeezelite <path>  Path to squeezelite binary" << std::endl;
     std::cout << std::endl;
@@ -261,6 +270,9 @@ Config parse_args(int argc, char* argv[]) {
         }
         else if (arg == "-v") {
             config.verbose = true;
+        }
+        else if (arg == "-q" || arg == "--quiet") {
+            config.quiet = true;
         }
         else if (arg == "-W") {
             config.wav_header = true;
@@ -445,12 +457,16 @@ int main(int argc, char* argv[]) {
     // Validate PCM output bit depth
     const int output_bit_depth = config.sample_format;
     if (output_bit_depth != 16 && output_bit_depth != 24 && output_bit_depth != 32) {
-        std::cerr << "Invalid sample format: " << output_bit_depth
-                  << " (must be 16, 24, or 32)" << std::endl;
+        LOG_ERROR("Invalid sample format: " << output_bit_depth << " (must be 16, 24, or 32)");
         return 1;
     }
 
     g_verbose = config.verbose;
+    if (config.verbose) {
+        g_logLevel = LogLevel::DEBUG;
+    } else if (config.quiet) {
+        g_logLevel = LogLevel::WARN;
+    }
 
     if (g_verbose) {
         g_logRing = new LogRing();
@@ -466,6 +482,7 @@ int main(int argc, char* argv[]) {
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    signal(SIGUSR1, stats_signal_handler);
 
     // Create DirettaSync instance
     g_diretta = std::make_unique<DirettaSync>();
@@ -483,21 +500,21 @@ int main(int argc, char* argv[]) {
         g_diretta->setMTU(config.mtu);
     }
 
-    std::cout << "Initializing Diretta..." << std::endl;
+    LOG_INFO("Initializing Diretta...");
 
     if (!g_diretta->enable(direttaConfig)) {
-        std::cerr << "Failed to enable Diretta. Check that a Diretta target is available." << std::endl;
-        std::cerr << "Use -l to list available targets." << std::endl;
+        LOG_ERROR("Failed to enable Diretta. Check that a Diretta target is available.");
+        LOG_ERROR("Use -l to list available targets.");
         if (g_logRing) delete g_logRing;
         return 1;
     }
 
-    std::cout << "Diretta enabled successfully" << std::endl;
+    LOG_INFO("Diretta enabled successfully");
 
     // Create pipe for squeezelite stdout (audio + headers)
     int pipefd[2];
     if (pipe(pipefd) == -1) {
-        std::cerr << "Failed to create pipe: " << strerror(errno) << std::endl;
+        LOG_ERROR("Failed to create pipe: " << strerror(errno));
         g_diretta->disable();
         if (g_logRing) delete g_logRing;
         return 1;
@@ -505,7 +522,7 @@ int main(int argc, char* argv[]) {
 
     // Build squeezelite command
     std::vector<std::string> squeezelite_args = build_squeezelite_args(config, "-");
-    if (g_verbose) {
+    if (g_logLevel >= LogLevel::DEBUG) {
         std::cout << "Squeezelite command: ";
         for (const auto& arg : squeezelite_args) {
             std::cout << arg << " ";
@@ -517,7 +534,7 @@ int main(int argc, char* argv[]) {
     squeezelite_pid = fork();
 
     if (squeezelite_pid == -1) {
-        std::cerr << "Failed to fork" << std::endl;
+        LOG_ERROR("Failed to fork");
         close(pipefd[0]);
         close(pipefd[1]);
         g_diretta->disable();
@@ -530,7 +547,7 @@ int main(int argc, char* argv[]) {
         close(pipefd[0]);  // Close read end
 
         if (dup2(pipefd[1], STDOUT_FILENO) == -1) {
-            std::cerr << "Failed to redirect stdout: " << strerror(errno) << std::endl;
+            LOG_ERROR("Failed to redirect stdout: " << strerror(errno));
             exit(1);
         }
         close(pipefd[1]);
@@ -547,7 +564,7 @@ int main(int argc, char* argv[]) {
 
         execvp(c_args[0], c_args.data());
 
-        std::cerr << "Failed to execute squeezelite: " << strerror(errno) << std::endl;
+        LOG_ERROR("Failed to execute squeezelite: " << strerror(errno));
         exit(1);
     }
 
@@ -555,9 +572,9 @@ int main(int argc, char* argv[]) {
     close(pipefd[1]);  // Close write end
     int fifo_fd = pipefd[0];
 
-    std::cout << "Squeezelite started (PID: " << squeezelite_pid << ")" << std::endl;
-    std::cout << "Waiting for first track header..." << std::endl;
-    std::cout << std::endl;
+    LOG_INFO("Squeezelite started (PID: " << squeezelite_pid << ")");
+    LOG_INFO("Waiting for first track header...");
+    LOG_INFO("");
 
     // ================================================================
     // Main loop: synchronous header-based format detection
@@ -596,18 +613,18 @@ int main(int argc, char* argv[]) {
         SqFormatHeader hdr;
         if (!reader.readExact(&hdr, sizeof(hdr))) {
             if (running) {
-                std::cout << "Squeezelite pipe closed" << std::endl;
+                LOG_INFO("Squeezelite pipe closed");
             }
             break;
         }
 
         // Validate magic
         if (memcmp(hdr.magic, SQFH_MAGIC, 4) != 0) {
-            std::cerr << "ERROR: Expected SQFH header, got: "
+            LOG_ERROR("Expected SQFH header, got: "
                       << std::hex << (int)hdr.magic[0] << " " << (int)hdr.magic[1]
                       << " " << (int)hdr.magic[2] << " " << (int)hdr.magic[3]
-                      << std::dec << std::endl;
-            std::cerr << "Stream desynchronized. Is squeezelite patched for v2.0?" << std::endl;
+                      << std::dec);
+            LOG_ERROR("Stream desynchronized. Is squeezelite patched for v2.0?");
             running = false;
             break;
         }
@@ -616,13 +633,11 @@ int main(int argc, char* argv[]) {
         DSDFormatType dsd_type = static_cast<DSDFormatType>(hdr.dsd_format);
         bool is_dsd = (dsd_type != DSDFormatType::NONE);
 
-        if (g_verbose) {
-            std::cout << "\n[Header] v" << (int)hdr.version
-                      << " ch=" << (int)hdr.channels
-                      << " depth=" << (int)hdr.bit_depth
-                      << " dsd=" << (int)hdr.dsd_format
-                      << " rate=" << hdr.sample_rate << "Hz" << std::endl;
-        }
+        LOG_DEBUG("\n[Header] v" << (int)hdr.version
+                  << " ch=" << (int)hdr.channels
+                  << " depth=" << (int)hdr.bit_depth
+                  << " dsd=" << (int)hdr.dsd_format
+                  << " rate=" << hdr.sample_rate << "Hz");
 
         // ============================================================
         // Phase 2: Determine if format changed
@@ -648,18 +663,16 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            std::cout << "\n[Format Change] ";
             if (dsd_type == DSDFormatType::DOP) {
-                std::cout << "DoP->DSD at " << actual_rate << "Hz"
-                          << " (DoP rate: " << hdr.sample_rate << "Hz)";
+                LOG_INFO("\n[Format Change] DoP->DSD at " << actual_rate << "Hz"
+                          << " (DoP rate: " << hdr.sample_rate << "Hz)");
             } else if (is_dsd) {
-                std::cout << "DSD at " << actual_rate << "Hz"
-                          << " (frame rate: " << hdr.sample_rate << "Hz)";
+                LOG_INFO("\n[Format Change] DSD at " << actual_rate << "Hz"
+                          << " (frame rate: " << hdr.sample_rate << "Hz)");
             } else {
-                std::cout << "PCM at " << actual_rate << "Hz / "
-                          << (int)hdr.bit_depth << "-bit";
+                LOG_INFO("\n[Format Change] PCM at " << actual_rate << "Hz / "
+                          << (int)hdr.bit_depth << "-bit");
             }
-            std::cout << std::endl;
 
             // Don't call close() before open() — let open() handle the transition
             // internally. close() sets m_open=false which prevents open() from
@@ -676,16 +689,14 @@ int main(int argc, char* argv[]) {
 
             if (is_dsd) {
                 format.dsdFormat = AudioFormat::DSDFormat::DFF;  // MSB (byte-swap in de-interleave)
-                if (g_verbose) {
-                    std::cout << "[DSD Format] "
-                              << (dsd_type == DSDFormatType::DOP ? "DoP->DSD" : "Native DSD")
-                              << " as DFF (MSB)" << std::endl;
-                }
+                LOG_DEBUG("[DSD Format] "
+                          << (dsd_type == DSDFormatType::DOP ? "DoP->DSD" : "Native DSD")
+                          << " as DFF (MSB)");
             }
 
             // Open Diretta with new format
             if (!g_diretta->open(format)) {
-                std::cerr << "Failed to open Diretta with new format" << std::endl;
+                LOG_ERROR("Failed to open Diretta with new format");
                 running = false;
                 break;
             }
@@ -704,9 +715,7 @@ int main(int argc, char* argv[]) {
             // ========================================================
             // Burst-fill: fill ring buffer before rate-limited playback
             // ========================================================
-            if (g_verbose) {
-                std::cout << "[Burst Fill] Starting prefill..." << std::endl;
-            }
+            LOG_DEBUG("[Burst Fill] Starting prefill...");
 
             size_t bytes_per_frame = SQZ_BYTES_PER_SAMPLE * hdr.channels;
             auto burst_start = std::chrono::steady_clock::now();
@@ -716,16 +725,14 @@ int main(int argc, char* argv[]) {
             while (!g_diretta->isPrefillComplete() && running) {
                 auto elapsed = std::chrono::steady_clock::now() - burst_start;
                 if (elapsed > burst_timeout) {
-                    std::cerr << "[Burst Fill] WARNING: Timeout after 5s" << std::endl;
+                    LOG_WARN("[Burst Fill] Timeout after 5s");
                     break;
                 }
 
                 // Peek for next header (new track during burst)
                 uint8_t peek_buf[4];
                 if (reader.peek(peek_buf, 4) && memcmp(peek_buf, SQFH_MAGIC, 4) == 0) {
-                    if (g_verbose) {
-                        std::cout << "[Burst Fill] Next track header during burst" << std::endl;
-                    }
+                    LOG_DEBUG("[Burst Fill] Next track header during burst");
                     break;
                 }
 
@@ -758,24 +765,20 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            if (g_verbose) {
+            if (g_logLevel >= LogLevel::DEBUG) {
                 auto burst_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - burst_start);
-                std::cout << "[Burst Fill] Complete: " << burst_bytes << " bytes in "
-                          << burst_elapsed.count() << "ms" << std::endl;
+                LOG_DEBUG("[Burst Fill] Complete: " << burst_bytes << " bytes in "
+                          << burst_elapsed.count() << "ms");
             }
 
-            std::cout << "[Ready] ";
-            if (dsd_type == DSDFormatType::DOP) std::cout << "DoP->DSD";
-            else if (is_dsd) std::cout << "DSD";
-            else std::cout << "PCM";
-            std::cout << " at " << actual_rate << "Hz" << std::endl;
+            if (dsd_type == DSDFormatType::DOP) LOG_INFO("[Ready] DoP->DSD at " << actual_rate << "Hz");
+            else if (is_dsd) LOG_INFO("[Ready] DSD at " << actual_rate << "Hz");
+            else LOG_INFO("[Ready] PCM at " << actual_rate << "Hz");
 
         } else {
             // Same format — gapless transition, no reopen needed
-            if (g_verbose) {
-                std::cout << "[Gapless] Same format, continuing stream" << std::endl;
-            }
+            LOG_DEBUG("[Gapless] Same format, continuing stream");
         }
 
         // ============================================================
@@ -795,9 +798,9 @@ int main(int argc, char* argv[]) {
 
             if (bytes_read <= 0) {
                 if (bytes_read == 0) {
-                    std::cout << "Squeezelite pipe closed" << std::endl;
+                    LOG_INFO("Squeezelite pipe closed");
                 } else if (errno != EINTR) {
-                    std::cerr << "Error reading from pipe: " << strerror(errno) << std::endl;
+                    LOG_ERROR("Error reading from pipe: " << strerror(errno));
                 }
                 running = false;
                 break;
@@ -848,18 +851,18 @@ int main(int argc, char* argv[]) {
             total_bytes += static_cast<uint64_t>(bytes_read);
             total_frames += num_frames;
 
-            // Progress (verbose, every ~10 seconds)
-            if (g_verbose && total_frames % (rate_for_timing * 10) < (PIPE_BUF_SIZE / bytes_per_frame)) {
+            // Progress (debug level, every ~10 seconds)
+            if (g_logLevel >= LogLevel::DEBUG && total_frames % (rate_for_timing * 10) < (PIPE_BUF_SIZE / bytes_per_frame)) {
                 double seconds = static_cast<double>(total_frames) / static_cast<double>(rate_for_timing);
-                std::cout << "Streamed: " << std::fixed << std::setprecision(1)
-                          << seconds << "s (" << (total_bytes / 1024 / 1024) << " MB)" << std::endl;
+                LOG_DEBUG("Streamed: " << std::fixed << std::setprecision(1)
+                          << seconds << "s (" << (total_bytes / 1024 / 1024) << " MB)");
             }
         }
     }
 
     // Cleanup
-    std::cout << std::endl;
-    std::cout << "Shutting down..." << std::endl;
+    LOG_INFO("");
+    LOG_INFO("Shutting down...");
 
     if (diretta_open) {
         g_diretta->close();
@@ -879,9 +882,9 @@ int main(int argc, char* argv[]) {
         g_logRing = nullptr;
     }
 
-    std::cout << "Stopped" << std::endl;
-    std::cout << "Total streamed: " << total_frames << " frames ("
-              << (total_bytes / 1024 / 1024) << " MB)" << std::endl;
+    LOG_INFO("Stopped");
+    LOG_INFO("Total streamed: " << total_frames << " frames ("
+              << (total_bytes / 1024 / 1024) << " MB)");
 
     return 0;
 }

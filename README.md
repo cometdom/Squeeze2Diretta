@@ -1,4 +1,4 @@
-# squeeze2diretta v2.0.0
+# squeeze2diretta v2.0.1
 
 **Squeezelite to Diretta Bridge - Native DSD & Hi-Res PCM Streaming**
 
@@ -8,7 +8,7 @@
 
 ---
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)
 ![DSD](https://img.shields.io/badge/DSD-Native-green.svg)
 ![SDK](https://img.shields.io/badge/SDK-DIRETTA::Sync-orange.svg)
 
@@ -114,7 +114,7 @@ This tool acts as a **wrapper** that:
 - **Optimized for DSF files**: Common audiophile format
 
 ### Low-Latency Architecture
-- **DirettaSync v2.0**: Lock-free ring buffers, SIMD optimizations
+- **DirettaSync v2.0**: Lock-free ring buffers, SIMD optimizations (AVX2 on x64, NEON on ARM64)
 - **Direct pipe**: Squeezelite stdout → squeeze2diretta (minimal overhead)
 - **Consumer-driven flow control**: Diretta SDK consumption rate drives data delivery (±50µs jitter)
 
@@ -392,6 +392,7 @@ Found 2 Diretta target(s):
 --target, -t <index>    Select Diretta target by index (required)
 --list-targets          List available Diretta targets and exit
 --verbose, -v           Enable verbose debug output
+--quiet, -q             Quiet mode (warnings and errors only)
 -a <bits>               PCM output bit depth: 16, 24, or 32 (default: 32)
 -W                      Enable WAV/AIFF header parsing in Squeezelite
 ```
@@ -536,4 +537,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 **Enjoy native DSD and hi-res PCM streaming from your LMS library!**
 
-*Last updated: 2026-02-14*
+*Last updated: 2026-02-16 (v2.0.1)*

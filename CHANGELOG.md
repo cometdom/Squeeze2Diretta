@@ -5,6 +5,59 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - Unreleased
+
+### Added
+
+**Centralized Log Level System:**
+- New `LogLevel.h` header with 4 levels: ERROR, WARN, INFO, DEBUG
+- `-q` / `--quiet` option: show only warnings and errors (WARN level)
+- `-v` continues to work as before (DEBUG level)
+- Default level (INFO) produces the same output as v2.0.0
+- All source files migrated from per-file `DEBUG_LOG`/`DIRETTA_LOG` macros to unified log levels
+- In `NOLOG` builds, all logging macros compile to no-ops
+
+**Runtime Statistics via SIGUSR1:**
+- Send `kill -USR1 <pid>` to dump live statistics to stdout
+- Shows: playback state, current format, buffer fill level, MTU, stream/push/underrun counters
+- Useful for monitoring production systems via systemd journal
+
+**MS Mode Negotiation Logging:**
+- Verbose log now shows the MS mode negotiated with the Diretta Target
+- From second track onwards: supported modes, requested mode, and negotiated mode
+- First track: clear message that MS info becomes available after first connection
+- Uses "negotiated" wording to clarify the mode is inferred from AUTO algorithm + target capabilities
+
+### Fixed
+
+**Atomic Ordering Fix in RingAccessGuard:**
+- Changed `fetch_add` from `memory_order_acquire` to `memory_order_acq_rel`
+- Ensures the increment is visible to the reconfiguration thread on all architectures (ARM64)
+
+### Added (ARM Architecture)
+
+**ARM NEON SIMD Format Conversions:**
+- Hand-optimized NEON intrinsics for all PCM and DSD format conversions on ARM64
+- PCM: `convert24BitPacked` (LSB/MSB), `convert16To32` using `vzip`/`vshrn`/`vmovn` intrinsics
+- DSD: all 4 conversion modes (Passthrough, BitReverse, ByteSwap, BitReverseSwap) using `vzip1q_u32`/`vzip2q_u32` interleaving
+- Bit reversal via `vqtbl1q_u8` LUT-based nibble swap, byte swap via `vrev32q_u8`
+- Automatic detection via `DIRETTA_HAS_NEON` macro (`__aarch64__` + `__ARM_NEON`)
+- Fallback to scalar code when NEON is not available
+- Ported from DirettaRendererUPnP v2.0.4
+
+### Changed
+
+**Production Build in install.sh:**
+- `install.sh` now configures CMake with `-DNOLOG=ON` by default (disables SDK internal logging)
+- Application-level logging (`-v`/`-q`) remains fully functional
+- New `NOLOG` CMake option added to `CMakeLists.txt`
+
+**Updated systemd Configuration:**
+- `squeeze2diretta.conf`: documented `-q` option alongside `-v`
+- `start-squeeze2diretta.sh`: passes `$VERBOSE` value directly instead of hardcoded `-v`
+
+---
+
 ## [2.0.0] - 2026-02-14
 
 ### UPGRADE NOTICE
@@ -205,6 +258,7 @@ in the new configuration file.
 
 ---
 
+[2.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.1
 [2.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.0
 [1.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.2
 [1.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.1

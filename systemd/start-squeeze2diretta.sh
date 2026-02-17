@@ -54,9 +54,9 @@ if [ "$WAV_HEADER" = "yes" ] || [ "$WAV_HEADER" = "true" ] || [ "$WAV_HEADER" = 
     CMD="$CMD -W"
 fi
 
-# Optional verbose mode
+# Log verbosity (-v for debug, -q for quiet)
 if [ -n "$VERBOSE" ]; then
-    CMD="$CMD -v"
+    CMD="$CMD $VERBOSE"
 fi
 
 # Extra options

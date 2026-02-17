@@ -103,22 +103,23 @@ extern LogRing* g_logRing;
 //=============================================================================
 
 extern bool g_verbose;
+#include "LogLevel.h"
 
 #ifdef NOLOG
 // Production build: compile out all verbose logging for zero overhead
 #define DIRETTA_LOG(msg) do {} while(0)
 #define DIRETTA_LOG_ASYNC(msg) do {} while(0)
 #else
-// Debug build: check g_verbose at runtime
+// Debug build: check g_logLevel at runtime
 #define DIRETTA_LOG(msg) do { \
-    if (g_verbose) { \
+    if (g_logLevel >= LogLevel::DEBUG) { \
         std::cout << "[DirettaSync] " << msg << std::endl; \
     } \
 } while(0)
 
 // Async logging macro for hot paths (non-blocking)
 #define DIRETTA_LOG_ASYNC(msg) do { \
-    if (g_logRing && g_verbose) { \
+    if (g_logRing && g_logLevel >= LogLevel::DEBUG) { \
         std::ostringstream _oss; \
         _oss << msg; \
         g_logRing->push(_oss.str().c_str()); \
@@ -385,6 +386,7 @@ public:
 
     float getBufferLevel() const;
     const AudioFormat& getFormat() const { return m_currentFormat; }
+    void dumpStats() const;
 
     /**
      * @brief Check if prefill is complete (ring buffer has enough data to start playback)

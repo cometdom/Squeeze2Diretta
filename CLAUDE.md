@@ -65,7 +65,8 @@ LMS (network)
 | `diretta/DirettaSync.cpp/h` | Diretta SDK wrapper (from DirettaRendererUPnP v2.0) |
 | `diretta/DirettaRingBuffer.h` | Lock-free SPSC ring buffer |
 | `diretta/globals.cpp/h` | Logging configuration |
-| `diretta/FastMemcpy*.h` | SIMD memory operations |
+| `diretta/FastMemcpy*.h` | SIMD memory operations (AVX2/AVX-512 on x64) |
+| `diretta/LogLevel.h` | Centralized log level system (ERROR/WARN/INFO/DEBUG) |
 
 ## Format Change Handling (v2.0)
 

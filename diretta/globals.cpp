@@ -6,7 +6,10 @@
 #include "globals.h"
 #include "DirettaSync.h"
 
-// Global verbose flag - controls logging output
+// Global log level - default INFO (same output as before)
+LogLevel g_logLevel = LogLevel::INFO;
+
+// Global verbose flag - kept for DirettaSync compatibility
 bool g_verbose = false;
 
 // Global log ring for async logging in hot paths

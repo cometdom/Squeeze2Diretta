@@ -58,8 +58,8 @@ public:
         if (reconfiguring.load(std::memory_order_acquire)) {
             return;
         }
-        // C2: acquire ensures increment visible to beginReconfigure() before ring ops
-        users_.fetch_add(1, std::memory_order_acquire);
+        // C2: acq_rel ensures increment is visible to beginReconfigure() on all architectures
+        users_.fetch_add(1, std::memory_order_acq_rel);
         if (reconfiguring.load(std::memory_order_acquire)) {
             // C2: bail-out - never entered guarded section, relaxed is safe
             users_.fetch_sub(1, std::memory_order_relaxed);
@@ -356,17 +356,26 @@ void DirettaSync::logSinkCapabilities() {
 
     // SDK 148: Log supported multi-stream modes
     // supportMSmode is a bitmask: bit0=MS1, bit1=MS2, bit2=MS3
+    // This field is populated by the SDK after the first connection completes,
+    // so it reads 0 on the very first track.
     uint16_t msmode = info.supportMSmode;
-    std::cout << "[DirettaSync]   MS modes: "
-              << ((msmode & 0x01) ? "MS1 " : "")
-              << ((msmode & 0x02) ? "MS2 " : "")
-              << ((msmode & 0x04) ? "MS3 " : "")
-              << (msmode == 0 ? "(none)" : "")
-              << std::endl;
-
-    // Warn if MS3 (our default) is not supported
-    if (!(msmode & 0x04) && msmode != 0) {
-        std::cerr << "[DirettaSync] WARNING: Target does not support MS3 mode (using MS3 anyway)" << std::endl;
+    if (msmode != 0) {
+        std::cout << "[DirettaSync]   MS modes supported: "
+                  << ((msmode & 0x01) ? "MS1 " : "")
+                  << ((msmode & 0x02) ? "MS2 " : "")
+                  << ((msmode & 0x04) ? "MS3 " : "")
+                  << std::endl;
+        std::cout << "[DirettaSync]   MS mode requested: AUTO (prefers MS3 > MS1 > NONE)" << std::endl;
+        // Note: the actual negotiated MS mode (MSmodeSet) is private in the SDK.
+        // We infer the active mode from the AUTO algorithm + target capabilities.
+        const char* activeMode = "NONE";
+        if (msmode & 0x04) activeMode = "MS3";
+        else if (msmode & 0x01) activeMode = "MS1";
+        std::cout << "[DirettaSync]   MS mode negotiated: " << activeMode
+                  << " (AUTO selects highest supported)" << std::endl;
+    } else {
+        std::cout << "[DirettaSync]   MS modes: (available from next track — target reports capabilities after first connection)"
+                  << std::endl;
     }
 }
 
@@ -441,6 +450,19 @@ bool DirettaSync::open(const AudioFormat& format) {
             play();
             m_playing = true;
             m_paused = false;
+
+            // Log MS mode on quick resume — supportMSmode is populated after first session
+            if (g_logLevel >= LogLevel::DEBUG) {
+                const auto& info = getSinkInfo();
+                uint16_t msmode = info.supportMSmode;
+                if (msmode != 0) {
+                    const char* activeMode = "NONE";
+                    if (msmode & 0x04) activeMode = "MS3";
+                    else if (msmode & 0x01) activeMode = "MS1";
+                    DIRETTA_LOG("MS mode negotiated: " << activeMode);
+                }
+            }
+
             std::cout << "[DirettaSync] ========== OPEN COMPLETE (quick) ==========" << std::endl;
             return true;
         } else {
@@ -679,6 +701,17 @@ bool DirettaSync::open(const AudioFormat& format) {
     // Full reset for first open or after format change reopen
     if (needFullConnect) {
         fullReset();
+        // Log MS mode after reopen — supportMSmode may now be populated
+        if (g_logLevel >= LogLevel::DEBUG && m_hasPreviousFormat) {
+            const auto& info = getSinkInfo();
+            uint16_t msmode = info.supportMSmode;
+            if (msmode != 0) {
+                const char* activeMode = "NONE";
+                if (msmode & 0x04) activeMode = "MS3";
+                else if (msmode & 0x01) activeMode = "MS1";
+                DIRETTA_LOG("MS mode negotiated: " << activeMode);
+            }
+        }
     }
     m_isDsdMode.store(newIsDsd, std::memory_order_release);
 
@@ -1460,6 +1493,33 @@ float DirettaSync::getBufferLevel() const {
     size_t size = m_ringBuffer.size();
     if (size == 0) return 0.0f;
     return static_cast<float>(m_ringBuffer.getAvailable()) / static_cast<float>(size);
+}
+
+void DirettaSync::dumpStats() const {
+    std::cout << "\n════════════════════════════════════════" << std::endl;
+    std::cout << "[DirettaSync] Runtime Statistics" << std::endl;
+    std::cout << "════════════════════════════════════════" << std::endl;
+    std::cout << "  State:       "
+              << (m_playing.load(std::memory_order_relaxed) ? "PLAYING" :
+                  m_paused.load(std::memory_order_relaxed) ? "PAUSED" :
+                  m_open.load(std::memory_order_relaxed) ? "OPEN" : "STOPPED")
+              << std::endl;
+    const auto& fmt = m_currentFormat;
+    if (m_open.load(std::memory_order_relaxed)) {
+        std::cout << "  Format:      " << fmt.sampleRate << "Hz/"
+                  << fmt.bitDepth << "bit/" << fmt.channels << "ch "
+                  << (fmt.isDSD ? "DSD" : "PCM") << std::endl;
+    }
+    size_t ringSize = m_ringBuffer.size();
+    size_t avail = m_ringBuffer.getAvailable();
+    float fillPct = ringSize > 0 ? (100.0f * avail / ringSize) : 0.0f;
+    std::cout << "  Buffer:      " << avail << "/" << ringSize
+              << " bytes (" << std::fixed << std::setprecision(1) << fillPct << "%)" << std::endl;
+    std::cout << "  MTU:         " << m_effectiveMTU << std::endl;
+    std::cout << "  Streams:     " << m_streamCount.load(std::memory_order_relaxed) << std::endl;
+    std::cout << "  Pushes:      " << m_pushCount.load(std::memory_order_relaxed) << std::endl;
+    std::cout << "  Underruns:   " << m_underrunCount.load(std::memory_order_relaxed) << std::endl;
+    std::cout << "════════════════════════════════════════\n" << std::endl;
 }
 
 //=============================================================================

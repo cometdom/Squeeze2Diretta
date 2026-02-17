@@ -347,10 +347,10 @@ build_squeeze2diretta() {
     mkdir -p build
     cd build
 
-    # Configure with CMake
+    # Configure with CMake (production build: NOLOG disables SDK internal logging)
     print_info "Configuring with CMake..."
     export DIRETTA_SDK_PATH="$SDK_PATH"
-    cmake ..
+    cmake -DNOLOG=ON ..
 
     # Build
     print_info "Building squeeze2diretta..."
