@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shows: playback state, current format, buffer fill level, MTU, stream/push/underrun counters
 - Useful for monitoring production systems via systemd journal
 
-**MS Mode Active Logging:**
-- Verbose log now shows the actual MS mode negotiated with the Diretta Target
-- Three lines: supported modes, requested mode, and active mode
-- Resolves uncertainty when target doesn't report supported MS modes
+**MS Mode Negotiation Logging:**
+- Verbose log now shows the MS mode negotiated with the Diretta Target
+- From second track onwards: supported modes, requested mode, and negotiated mode
+- First track: clear message that MS info becomes available after first connection
+- Uses "negotiated" wording to clarify the mode is inferred from AUTO algorithm + target capabilities
 
 ### Fixed
 
