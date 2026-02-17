@@ -1,9 +1,7 @@
-diff --git a/output_stdout.c b/output_stdout.c
-index 3fc61f5..0d52c41 100644
---- a/output_stdout.c
-+++ b/output_stdout.c
+--- a/output_stdout.c	2026-02-17 10:36:55.945982782 +0100
++++ b/output_stdout.c	2026-02-17 10:37:39.737991051 +0100
 @@ -1,4 +1,4 @@
--/*
+-/* 
 +/*
   *  Squeezelite - lightweight headless squeezebox emulator
   *
@@ -12,7 +10,7 @@ index 3fc61f5..0d52c41 100644
   * it under the terms of the GNU General Public License as published by
   * the Free Software Foundation, either version 3 of the License, or
   * (at your option) any later version.
-- *
+- * 
 + *
   * This program is distributed in the hope that it will be useful,
   * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,16 +18,16 @@ index 3fc61f5..0d52c41 100644
 @@ -19,7 +19,7 @@
   *
   */
-
+ 
 -// Stdout output
 +// Stdout output with in-band format signaling for squeeze2diretta v2.0
-
+ 
  #include "squeezelite.h"
-
-@@ -45,13 +45,75 @@ static u8_t *buf;
+ 
+@@ -45,13 +45,75 @@
  static unsigned buffill;
  static int bytes_per_frame;
-
+ 
 +// ================================================================
 +// In-band format header for squeeze2diretta v2.0
 +// Written to stdout only when the audio format changes (or for
@@ -94,18 +92,18 @@ index 3fc61f5..0d52c41 100644
 +
  static int _stdout_write_frames(frames_t out_frames, bool silence, s32_t gainL, s32_t gainR, u8_t flags,
  								s32_t cross_gain_in, s32_t cross_gain_out, s32_t **cross_ptr) {
-
+ 
  	u8_t *obuf;
-
+ 
  	if (!silence) {
--
+-		
 +
  		if (output.fade == FADE_ACTIVE && output.fade_dir == FADE_CROSS && *cross_ptr) {
  			_apply_cross(outputbuf, out_frames, cross_gain_in, cross_gain_out, cross_ptr);
  		}
-@@ -83,6 +145,13 @@ static int _stdout_write_frames(frames_t out_frames, bool silence, s32_t gainL,
+@@ -83,6 +145,13 @@
  }
-
+ 
  static void *output_thread(void *vargp) {
 +	bool first_track_seen = false;
 +	bool header_emitted = false;
@@ -114,13 +112,13 @@ index 3fc61f5..0d52c41 100644
 +	u32_t last_sample_rate = 0;
 +	u8_t  last_bit_depth = 0;
 +	u8_t  last_dsd_format = 0;
-
+ 
  	LOCK;
-
-@@ -110,13 +179,61 @@ static void *output_thread(void *vargp) {
-
+ 
+@@ -110,13 +179,61 @@
+ 
  		_output_frames(FRAME_BLOCK);
-
+ 
 +		// Detect new track boundary and prepare format header.
 +		// output.track_started is set by _output_frames() when it processes
 +		// a track boundary (output.c line 155). It is later cleared by
@@ -152,7 +150,7 @@ index 3fc61f5..0d52c41 100644
 +		}
 +
  		UNLOCK;
-
+ 
 +		if (!first_track_seen) {
 +			// Suppress pre-track silence so the first bytes on stdout
 +			// are always a format header (wrapper expects "SQFH" magic)
@@ -170,12 +168,12 @@ index 3fc61f5..0d52c41 100644
 +			// No audio data and no header to emit — avoid busy-wait
 +			usleep(10000);
  		}
-
+ 
 +		// Write format header for the new track (after old-track audio)
 +		if (header_pending) {
 +			fwrite(&hdr, sizeof(hdr), 1, stdout);
 +			fflush(stdout);
 +		}
  	}
-
+ 
  	return 0;
