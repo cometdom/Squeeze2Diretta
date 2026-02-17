@@ -264,7 +264,7 @@ rm -rf squeezelite/
 
 # 4. Rebuild squeeze2diretta
 cd build
-cmake ..
+cmake -DNOLOG=ON ..
 make
 
 # 5. Restart the service
