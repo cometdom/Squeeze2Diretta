@@ -1,4 +1,4 @@
-# squeeze2diretta v2.0.1
+# squeeze2diretta v2.0.2
 
 **Squeezelite to Diretta Bridge - Native DSD & Hi-Res PCM Streaming**
 
@@ -8,7 +8,7 @@
 
 ---
 
-![Version](https://img.shields.io/badge/version-2.0.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.0.2-blue.svg)
 ![DSD](https://img.shields.io/badge/DSD-Native-green.svg)
 ![SDK](https://img.shields.io/badge/SDK-DIRETTA::Sync-orange.svg)
 
@@ -243,6 +243,30 @@ git pull
 The old `squeezelite-stdout-flush.patch` is replaced by `squeezelite-format-header.patch`. Your configuration file (`squeeze2diretta.conf`) is compatible and does not need to be recreated.
 
 See [CHANGELOG.md](CHANGELOG.md) for a full list of changes.
+
+---
+
+### Upgrading from v2.0.1 to v2.0.2
+
+v2.0.2 adds rebuffering for cleaner recovery during network stalls. No squeezelite rebuild needed.
+
+```bash
+# 1. Stop the service
+sudo systemctl stop squeeze2diretta
+
+# 2. Pull the latest version and rebuild
+cd squeeze2diretta
+git pull
+rm -rf build/
+./install.sh
+
+# 3. Restart the service
+sudo systemctl start squeeze2diretta
+```
+
+> **Note:** Your existing configuration (`squeeze2diretta.conf`) and squeezelite binary are preserved.
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ---
 
@@ -565,4 +589,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 **Enjoy native DSD and hi-res PCM streaming from your LMS library!**
 
-*Last updated: 2026-02-17 (v2.0.1)*
+*Last updated: 2026-02-19 (v2.0.2)*

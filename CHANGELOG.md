@@ -5,6 +5,18 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-02-19
+
+### Added
+
+**Rebuffering on Underrun (streaming resilience):**
+- When the ring buffer empties during a network stall, small data bursts were immediately consumed, creating a rapid silence/audio alternation ("CD skip" effect)
+- Now enters rebuffering mode on underrun: holds silence until the buffer refills to 20%
+- Result: clean silence gap followed by smooth playback resumption instead of stuttering
+- Logged as `Buffer underrun — entering rebuffering mode` / `Rebuffering complete — resuming playback`
+
+---
+
 ## [2.0.1] - 2026-02-17
 
 ### Added
@@ -27,12 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - From second track onwards: supported modes, requested mode, and negotiated mode
 - First track: clear message that MS info becomes available after first connection
 - Uses "negotiated" wording to clarify the mode is inferred from AUTO algorithm + target capabilities
-
-**Rebuffering on Underrun (streaming resilience):**
-- When the ring buffer empties during a network stall, small data bursts were immediately consumed, creating a rapid silence/audio alternation ("CD skip" effect)
-- Now enters rebuffering mode on underrun: holds silence until the buffer refills to 20%
-- Result: clean silence gap followed by smooth playback resumption instead of stuttering
-- Logged as `Buffer underrun — entering rebuffering mode` / `Rebuffering complete — resuming playback`
 
 ### Fixed
 
@@ -270,6 +276,7 @@ in the new configuration file.
 
 ---
 
+[2.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.2
 [2.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.1
 [2.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.0
 [1.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.2
