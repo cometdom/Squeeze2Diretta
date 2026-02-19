@@ -121,13 +121,13 @@ bool DirettaSync::enable(const DirettaConfig& config) {
 
     m_calculator = std::make_unique<DirettaCycleCalculator>(m_effectiveMTU);
 
-    if (!openSyncConnection()) {
-        DIRETTA_LOG("Failed to open sync connection");
-        return false;
-    }
+    // Note: SDK connection is NOT opened here — it will be opened lazily
+    // by open() on the first track. This allows the Diretta Target to remain
+    // available for other sources (e.g., DirettaRendererUPnP) until playback
+    // actually starts.
 
     m_enabled = true;
-    DIRETTA_LOG("Enabled, MTU=" << m_effectiveMTU);
+    DIRETTA_LOG("Enabled, MTU=" << m_effectiveMTU << " (SDK deferred until first track)");
     return true;
 }
 
@@ -147,8 +147,10 @@ void DirettaSync::disable() {
 
     if (m_enabled) {
         shutdownWorker();
-        DIRETTA::Sync::close();
-        m_sdkOpen = false;
+        if (m_sdkOpen) {
+            DIRETTA::Sync::close();
+            m_sdkOpen = false;
+        }
         m_calculator.reset();
         m_enabled = false;
     }
