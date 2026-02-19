@@ -31,6 +31,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -155,6 +156,13 @@ public:
         memcpy(dst, m_buf + m_pos, chunk);
         m_pos += chunk;
         return static_cast<ssize_t>(chunk);
+    }
+
+    // Wait for data with timeout. Returns true if data available, false on timeout.
+    bool waitForData(int timeout_ms) {
+        if (m_len - m_pos > 0) return true;  // Internal buffer has data
+        struct pollfd pfd = { m_fd, POLLIN, 0 };
+        return ::poll(&pfd, 1, timeout_ms) > 0;
     }
 
 private:
@@ -591,6 +599,7 @@ int main(int argc, char* argv[]) {
     const size_t SQZ_BYTES_PER_SAMPLE = 4;
     const size_t PIPE_BUF_SIZE = 16384;
     const float RING_HIGH_WATER = 0.75f;  // Wait when ring buffer > 75% full
+    constexpr int IDLE_RELEASE_TIMEOUT_S = 5;  // Release target after 5s idle
 
     // Current format state
     AudioFormat current_format;
@@ -607,6 +616,16 @@ int main(int argc, char* argv[]) {
     std::vector<uint8_t> planar_buf(PIPE_BUF_SIZE);
 
     while (running) {
+        // ============================================================
+        // Idle release: free Diretta target if no new track arrives
+        // ============================================================
+        if (diretta_open && !reader.waitForData(IDLE_RELEASE_TIMEOUT_S * 1000)) {
+            LOG_INFO("No activity for " << IDLE_RELEASE_TIMEOUT_S
+                     << "s — releasing Diretta target for other sources");
+            g_diretta->release();
+            diretta_open = false;
+        }
+
         // ============================================================
         // Phase 1: Read format header (blocking)
         // ============================================================
@@ -865,7 +884,8 @@ int main(int argc, char* argv[]) {
     LOG_INFO("Shutting down...");
 
     if (diretta_open) {
-        g_diretta->close();
+        g_diretta->release();
+        diretta_open = false;
     }
     g_diretta->disable();
     g_diretta.reset();
