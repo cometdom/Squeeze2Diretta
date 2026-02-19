@@ -41,6 +41,14 @@
 // Version
 #define WRAPPER_VERSION "2.0.1"
 
+// Check if buffer is all zeros (PCM/DSD silence from squeezelite)
+static bool isSilence(const uint8_t* data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (data[i] != 0) return false;
+    }
+    return true;
+}
+
 // ================================================================
 // In-band format header (must match squeezelite output_stdout.c)
 // ================================================================
@@ -806,35 +814,9 @@ int main(int argc, char* argv[]) {
         size_t bytes_per_frame = SQZ_BYTES_PER_SAMPLE * hdr.channels;
         unsigned int rate_for_timing = is_dsd ? hdr.sample_rate : current_format.sampleRate;
 
+        auto last_audio_time = std::chrono::steady_clock::now();
+
         while (running) {
-            // Idle release: if no data for 5s, release target for other sources
-            if (!reader.waitForData(IDLE_RELEASE_TIMEOUT_S * 1000)) {
-                if (diretta_open) {
-                    LOG_INFO("No activity for " << IDLE_RELEASE_TIMEOUT_S
-                             << "s — releasing Diretta target for other sources");
-                    g_diretta->release();
-                    diretta_open = false;
-                }
-                continue;  // Keep polling until data arrives
-            }
-
-            // Re-acquire target after idle release
-            if (!diretta_open) {
-                // Check if it's a new format header — let outer loop handle it
-                uint8_t hdr_peek[4];
-                if (reader.peek(hdr_peek, 4) && memcmp(hdr_peek, SQFH_MAGIC, 4) == 0) {
-                    break;  // New format — outer loop will open() with new format
-                }
-                // Same format resume — re-acquire target
-                LOG_INFO("Activity resumed — re-acquiring Diretta target");
-                if (!g_diretta->open(current_format)) {
-                    LOG_ERROR("Failed to re-acquire Diretta target");
-                    running = false;
-                    break;
-                }
-                diretta_open = true;
-            }
-
             // Check for next track header
             uint8_t peek_buf[4];
             if (reader.peek(peek_buf, 4) && memcmp(peek_buf, SQFH_MAGIC, 4) == 0) {
@@ -851,6 +833,41 @@ int main(int argc, char* argv[]) {
                 }
                 running = false;
                 break;
+            }
+
+            // Silence detection for idle target release
+            bool silence = isSilence(audio_buf.data(), static_cast<size_t>(bytes_read));
+            if (!silence) {
+                last_audio_time = std::chrono::steady_clock::now();
+            } else if (diretta_open) {
+                auto elapsed = std::chrono::steady_clock::now() - last_audio_time;
+                if (elapsed >= std::chrono::seconds(IDLE_RELEASE_TIMEOUT_S)) {
+                    LOG_INFO("Silence for " << IDLE_RELEASE_TIMEOUT_S
+                             << "s — releasing Diretta target for other sources");
+                    g_diretta->release();
+                    diretta_open = false;
+                }
+            }
+
+            // While target is released, discard silence and wait for real audio
+            if (!diretta_open) {
+                if (silence) {
+                    continue;  // Discard silence
+                }
+                // Non-silence: check if a new format header follows
+                uint8_t hdr_peek[4];
+                if (reader.peek(hdr_peek, 4) && memcmp(hdr_peek, SQFH_MAGIC, 4) == 0) {
+                    break;  // New format — outer loop will handle open()
+                }
+                // Same format resume — re-acquire target
+                LOG_INFO("Activity resumed — re-acquiring Diretta target");
+                if (!g_diretta->open(current_format)) {
+                    LOG_ERROR("Failed to re-acquire Diretta target");
+                    running = false;
+                    break;
+                }
+                diretta_open = true;
+                last_audio_time = std::chrono::steady_clock::now();
             }
 
             size_t num_frames = static_cast<size_t>(bytes_read) / bytes_per_frame;
