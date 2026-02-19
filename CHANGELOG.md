@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **Idle Target Release (coexistence with DirettaRendererUPnP):**
-- When both services run simultaneously, squeeze2diretta now releases the Diretta Target after 5 seconds of inactivity
+- When both services run simultaneously, squeeze2diretta now releases the Diretta Target after 5 seconds of silence
 - Previously, the SDK connection was held indefinitely, preventing DirettaRendererUPnP from connecting
-- Uses `poll()` on the squeezelite pipe to detect idle state, then calls `release()` to free the target
+- Detects silence (all-zeros) in the squeezelite output stream to distinguish idle from active playback
+- SDK connection deferred at startup — target remains available until the first track actually plays
 - Target is automatically re-acquired when LMS starts the next track (~500ms overhead on first track after idle)
-- Logged as `No activity for 5s — releasing Diretta target for other sources`
+- Logged as `Silence for 5s — releasing Diretta target for other sources`
 
 **Rebuffering on Underrun (streaming resilience):**
 - When the ring buffer empties during a network stall, small data bursts were immediately consumed, creating a rapid silence/audio alternation ("CD skip" effect)
