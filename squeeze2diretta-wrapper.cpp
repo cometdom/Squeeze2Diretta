@@ -807,6 +807,34 @@ int main(int argc, char* argv[]) {
         unsigned int rate_for_timing = is_dsd ? hdr.sample_rate : current_format.sampleRate;
 
         while (running) {
+            // Idle release: if no data for 5s, release target for other sources
+            if (!reader.waitForData(IDLE_RELEASE_TIMEOUT_S * 1000)) {
+                if (diretta_open) {
+                    LOG_INFO("No activity for " << IDLE_RELEASE_TIMEOUT_S
+                             << "s — releasing Diretta target for other sources");
+                    g_diretta->release();
+                    diretta_open = false;
+                }
+                continue;  // Keep polling until data arrives
+            }
+
+            // Re-acquire target after idle release
+            if (!diretta_open) {
+                // Check if it's a new format header — let outer loop handle it
+                uint8_t hdr_peek[4];
+                if (reader.peek(hdr_peek, 4) && memcmp(hdr_peek, SQFH_MAGIC, 4) == 0) {
+                    break;  // New format — outer loop will open() with new format
+                }
+                // Same format resume — re-acquire target
+                LOG_INFO("Activity resumed — re-acquiring Diretta target");
+                if (!g_diretta->open(current_format)) {
+                    LOG_ERROR("Failed to re-acquire Diretta target");
+                    running = false;
+                    break;
+                }
+                diretta_open = true;
+            }
+
             // Check for next track header
             uint8_t peek_buf[4];
             if (reader.peek(peek_buf, 4) && memcmp(peek_buf, SQFH_MAGIC, 4) == 0) {
