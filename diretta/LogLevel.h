@@ -2,8 +2,9 @@
  * @file LogLevel.h
  * @brief Centralized log level system for squeeze2diretta
  *
- * Provides 4 log levels (ERROR, WARN, INFO, DEBUG) with compile-time
- * elimination in NOLOG builds and runtime filtering via g_logLevel.
+ * Provides 4 log levels (ERROR, WARN, INFO, DEBUG) with runtime filtering
+ * via g_logLevel. These macros are always active regardless of NOLOG.
+ * NOLOG only disables SDK internal logging (DIRETTA_LOG in DirettaSync.h).
  *
  * Usage:
  *   LOG_ERROR("something failed: " << reason);
@@ -21,12 +22,6 @@ enum class LogLevel { ERROR = 0, WARN = 1, INFO = 2, DEBUG = 3 };
 
 extern LogLevel g_logLevel;
 
-#ifdef NOLOG
-#define LOG_ERROR(x) do {} while(0)
-#define LOG_WARN(x)  do {} while(0)
-#define LOG_INFO(x)  do {} while(0)
-#define LOG_DEBUG(x) do {} while(0)
-#else
 #define LOG_ERROR(x) do { \
     if (g_logLevel >= LogLevel::ERROR) { std::cerr << x << std::endl; } \
 } while(0)
@@ -39,6 +34,5 @@ extern LogLevel g_logLevel;
 #define LOG_DEBUG(x) do { \
     if (g_logLevel >= LogLevel::DEBUG) { std::cout << x << std::endl; } \
 } while(0)
-#endif
 
 #endif // SQUEEZE2DIRETTA_LOGLEVEL_H

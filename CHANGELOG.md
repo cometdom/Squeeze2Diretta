@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-v` continues to work as before (DEBUG level)
 - Default level (INFO) produces the same output as v2.0.0
 - All source files migrated from per-file `DEBUG_LOG`/`DIRETTA_LOG` macros to unified log levels
-- In `NOLOG` builds, all logging macros compile to no-ops
+- `NOLOG` builds now only disable SDK internal logging (`DIRETTA_LOG`); application `LOG_*` macros remain active with runtime level control, so `-v` and `-q` work correctly in production builds
 
 **Runtime Statistics via SIGUSR1:**
 - Send `kill -USR1 <pid>` to dump live statistics to stdout
