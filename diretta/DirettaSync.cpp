@@ -127,7 +127,7 @@ bool DirettaSync::enable(const DirettaConfig& config) {
     // actually starts.
 
     m_enabled = true;
-    DIRETTA_LOG("Enabled, MTU=" << m_effectiveMTU << " (SDK deferred until first track)");
+    std::cout << "[DirettaSync] Enabled, MTU=" << m_effectiveMTU << " (SDK deferred until first track)" << std::endl;
     return true;
 }
 
