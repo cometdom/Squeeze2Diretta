@@ -39,7 +39,7 @@
 #include <sstream>
 
 // Version
-#define WRAPPER_VERSION "2.0.1"
+#define WRAPPER_VERSION "2.0.2"
 
 // Check if buffer is all zeros (PCM/DSD silence from squeezelite)
 static bool isSilence(const uint8_t* data, size_t len) {
@@ -65,6 +65,22 @@ struct __attribute__((packed)) SqFormatHeader {
 static_assert(sizeof(SqFormatHeader) == 16, "SqFormatHeader must be 16 bytes");
 
 static constexpr uint8_t SQFH_MAGIC[4] = {'S', 'Q', 'F', 'H'};
+
+// 5-byte signature: magic + version (reduces false positives in audio data)
+static constexpr uint8_t SQFH_SIGNATURE[5] = {'S', 'Q', 'F', 'H', 1};
+
+// Validate header fields to reject false positives from random audio data.
+// At high sample rates (e.g. 705600Hz stereo 32-bit = 5.6 MB/s), the 4-byte
+// "SQFH" sequence appears by chance roughly every ~12 minutes on average.
+static bool isValidHeader(const SqFormatHeader& hdr) {
+    if (hdr.version != 1) return false;
+    if (hdr.channels != 2) return false;
+    if (hdr.dsd_format > 3) return false;
+    if (hdr.bit_depth != 1 && hdr.bit_depth != 16 &&
+        hdr.bit_depth != 24 && hdr.bit_depth != 32) return false;
+    if (hdr.sample_rate == 0 || hdr.sample_rate > 768000) return false;
+    return true;
+}
 
 // DSD format types (from header dsd_format field)
 enum class DSDFormatType : uint8_t {
@@ -151,11 +167,13 @@ public:
 
         size_t chunk = std::min(avail, n);
 
-        // Scan for SQFH header embedded in the data.
-        // Start at byte 1 — byte 0 was already verified by peek() to not be 'S'QFH.
-        for (size_t i = 1; i + 3 <= chunk; i++) {
-            if (m_buf[m_pos + i] == 'S' && m_buf[m_pos + i + 1] == 'Q' &&
-                m_buf[m_pos + i + 2] == 'F' && m_buf[m_pos + i + 3] == 'H') {
+        // Scan for SQFH signature (magic + version=1) embedded in the data.
+        // Using 5 bytes instead of 4 reduces false positives from ~1/4GB to ~1/1TB.
+        // Start at byte 1 — byte 0 was already verified by peek() to not be a signature.
+        for (size_t i = 1; i + 4 <= chunk; i++) {
+            if (m_buf[m_pos + i]     == 'S' && m_buf[m_pos + i + 1] == 'Q' &&
+                m_buf[m_pos + i + 2] == 'F' && m_buf[m_pos + i + 3] == 'H' &&
+                m_buf[m_pos + i + 4] == 1) {
                 chunk = i;  // Stop before the header
                 break;
             }
@@ -217,8 +235,6 @@ struct Config {
     std::string rates = "";
     int sample_format = 32;              // -a (16, 24, or 32)
     std::string dsd_format = ":u32be";   // -D format
-    bool wav_header = false;             // -W
-
     // Diretta options
     int diretta_target = 0;
     int thread_mode = 1;
@@ -251,7 +267,6 @@ void print_usage(const char* prog) {
     std::cout << "                          -D           = DoP (DSD over PCM)" << std::endl;
     std::cout << "                          -D :u32be    = Native DSD Big Endian (MSB)" << std::endl;
     std::cout << "                          -D :u32le    = Native DSD Little Endian (LSB)" << std::endl;
-    std::cout << "  -W                    Read WAV/AIFF headers, ignore server parameters" << std::endl;
     std::cout << std::endl;
     std::cout << "Diretta Options:" << std::endl;
     std::cout << "  -t, --target <number> Diretta target number (default: 1 = first)" << std::endl;
@@ -289,9 +304,6 @@ Config parse_args(int argc, char* argv[]) {
         }
         else if (arg == "-q" || arg == "--quiet") {
             config.quiet = true;
-        }
-        else if (arg == "-W") {
-            config.wav_header = true;
         }
         else if (arg == "-D") {
             if (i + 1 < argc && argv[i + 1][0] == ':') {
@@ -337,9 +349,8 @@ std::vector<std::string> build_squeezelite_args(const Config& config, const std:
 
     args.push_back(config.squeezelite_path);
 
-    if (config.wav_header) {
-        args.push_back("-W");
-    }
+    // Always parse WAV/AIFF headers for reliable format detection
+    args.push_back("-W");
 
     // Output to stdout
     args.push_back("-o");
@@ -623,6 +634,11 @@ int main(int argc, char* argv[]) {
     std::vector<uint8_t> audio_buf(PIPE_BUF_SIZE);
     std::vector<uint8_t> planar_buf(PIPE_BUF_SIZE);
 
+    // Persistent header state (survives false positive recovery)
+    SqFormatHeader hdr{};
+    DSDFormatType dsd_type = DSDFormatType::NONE;
+    bool is_dsd = false;
+
     while (running) {
         // ============================================================
         // Idle release: free Diretta target if no new track arrives
@@ -637,8 +653,8 @@ int main(int argc, char* argv[]) {
         // ============================================================
         // Phase 1: Read format header (blocking)
         // ============================================================
-        SqFormatHeader hdr;
-        if (!reader.readExact(&hdr, sizeof(hdr))) {
+        SqFormatHeader new_hdr;
+        if (!reader.readExact(&new_hdr, sizeof(new_hdr))) {
             if (running) {
                 LOG_INFO("Squeezelite pipe closed");
             }
@@ -646,19 +662,38 @@ int main(int argc, char* argv[]) {
         }
 
         // Validate magic
-        if (memcmp(hdr.magic, SQFH_MAGIC, 4) != 0) {
+        if (memcmp(new_hdr.magic, SQFH_MAGIC, 4) != 0) {
             LOG_ERROR("Expected SQFH header, got: "
-                      << std::hex << (int)hdr.magic[0] << " " << (int)hdr.magic[1]
-                      << " " << (int)hdr.magic[2] << " " << (int)hdr.magic[3]
+                      << std::hex << (int)new_hdr.magic[0] << " " << (int)new_hdr.magic[1]
+                      << " " << (int)new_hdr.magic[2] << " " << (int)new_hdr.magic[3]
                       << std::dec);
             LOG_ERROR("Stream desynchronized. Is squeezelite patched for v2.0?");
             running = false;
             break;
         }
 
-        // Parse header
-        DSDFormatType dsd_type = static_cast<DSDFormatType>(hdr.dsd_format);
-        bool is_dsd = (dsd_type != DSDFormatType::NONE);
+        // Validate header fields (reject false positives from audio data)
+        if (!isValidHeader(new_hdr)) {
+            LOG_WARN("[Header] False positive SQFH in audio data — ignoring"
+                     << " (v=" << (int)new_hdr.version
+                     << " ch=" << (int)new_hdr.channels
+                     << " depth=" << (int)new_hdr.bit_depth
+                     << " dsd=" << (int)new_hdr.dsd_format
+                     << " rate=" << new_hdr.sample_rate << ")");
+            if (current_rate != 0) {
+                // We have a valid format — skip Phase 2 and resume Phase 3
+                // hdr/dsd_type/is_dsd retain their previous valid values
+                goto resume_streaming;
+            }
+            LOG_ERROR("First header is invalid — stream desynchronized");
+            running = false;
+            break;
+        }
+
+        // Header is valid — adopt it
+        hdr = new_hdr;
+        dsd_type = static_cast<DSDFormatType>(hdr.dsd_format);
+        is_dsd = (dsd_type != DSDFormatType::NONE);
 
         LOG_DEBUG("\n[Header] v" << (int)hdr.version
                   << " ch=" << (int)hdr.channels
@@ -669,6 +704,7 @@ int main(int argc, char* argv[]) {
         // ============================================================
         // Phase 2: Determine if format changed
         // ============================================================
+        {
         bool format_changed = (hdr.sample_rate != current_rate ||
                                 hdr.dsd_format != static_cast<uint8_t>(current_dsd_type) ||
                                 hdr.bit_depth != current_depth);
@@ -757,8 +793,8 @@ int main(int argc, char* argv[]) {
                 }
 
                 // Peek for next header (new track during burst)
-                uint8_t peek_buf[4];
-                if (reader.peek(peek_buf, 4) && memcmp(peek_buf, SQFH_MAGIC, 4) == 0) {
+                uint8_t peek_buf[5];
+                if (reader.peek(peek_buf, 5) && memcmp(peek_buf, SQFH_SIGNATURE, 5) == 0) {
                     LOG_DEBUG("[Burst Fill] Next track header during burst");
                     break;
                 }
@@ -807,19 +843,22 @@ int main(int argc, char* argv[]) {
             // Same format — gapless transition, no reopen needed
             LOG_DEBUG("[Gapless] Same format, continuing stream");
         }
+        } // end of Phase 2 block
 
         // ============================================================
         // Phase 3: Stream audio until next header or EOF
         // ============================================================
+        resume_streaming:  // Label for false positive SQFH recovery
+        {
         size_t bytes_per_frame = SQZ_BYTES_PER_SAMPLE * hdr.channels;
         unsigned int rate_for_timing = is_dsd ? hdr.sample_rate : current_format.sampleRate;
 
         auto last_audio_time = std::chrono::steady_clock::now();
 
         while (running) {
-            // Check for next track header
-            uint8_t peek_buf[4];
-            if (reader.peek(peek_buf, 4) && memcmp(peek_buf, SQFH_MAGIC, 4) == 0) {
+            // Check for next track header (5-byte signature: magic + version)
+            uint8_t peek_buf[5];
+            if (reader.peek(peek_buf, 5) && memcmp(peek_buf, SQFH_SIGNATURE, 5) == 0) {
                 break;  // Next track — back to outer loop for header parsing
             }
 
@@ -855,8 +894,8 @@ int main(int argc, char* argv[]) {
                     continue;  // Discard silence
                 }
                 // Non-silence: check if a new format header follows
-                uint8_t hdr_peek[4];
-                if (reader.peek(hdr_peek, 4) && memcmp(hdr_peek, SQFH_MAGIC, 4) == 0) {
+                uint8_t hdr_peek[5];
+                if (reader.peek(hdr_peek, 5) && memcmp(hdr_peek, SQFH_SIGNATURE, 5) == 0) {
                     break;  // New format — outer loop will handle open()
                 }
                 // Same format resume — re-acquire target
@@ -922,6 +961,7 @@ int main(int argc, char* argv[]) {
                           << seconds << "s (" << (total_bytes / 1024 / 1024) << " MB)");
             }
         }
+        } // end of Phase 3 block (resume_streaming)
     }
 
     // Cleanup

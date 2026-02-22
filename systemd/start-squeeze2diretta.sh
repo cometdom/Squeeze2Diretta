@@ -21,7 +21,6 @@ MAX_SAMPLE_RATE="${MAX_SAMPLE_RATE:-768000}"
 DSD_FORMAT="${DSD_FORMAT:-u32be}"
 PAUSE_ON_START="${PAUSE_ON_START:-no}"
 SAMPLE_FORMAT="${SAMPLE_FORMAT:-32}"
-WAV_HEADER="${WAV_HEADER:-no}"
 VERBOSE="${VERBOSE:-}"
 EXTRA_OPTS="${EXTRA_OPTS:-}"
 SQUEEZE2DIRETTA="$INSTALL_DIR/squeeze2diretta"
@@ -49,11 +48,6 @@ if [ "$SAMPLE_FORMAT" != "32" ] && [ -n "$SAMPLE_FORMAT" ]; then
     CMD="$CMD -a $SAMPLE_FORMAT"
 fi
 
-# WAV/AIFF header parsing
-if [ "$WAV_HEADER" = "yes" ] || [ "$WAV_HEADER" = "true" ] || [ "$WAV_HEADER" = "1" ]; then
-    CMD="$CMD -W"
-fi
-
 # Log verbosity (-v for debug, -q for quiet)
 if [ -n "$VERBOSE" ]; then
     CMD="$CMD $VERBOSE"
@@ -66,7 +60,7 @@ fi
 
 # Log the command being executed
 echo "════════════════════════════════════════════════════════"
-echo "  Starting squeeze2diretta v1.0.1"
+echo "  Starting squeeze2diretta v2.0.2"
 echo "════════════════════════════════════════════════════════"
 echo ""
 echo "Configuration:"
@@ -76,7 +70,6 @@ echo "  Player Name:      $PLAYER_NAME"
 echo "  Max Sample Rate:  $MAX_SAMPLE_RATE"
 echo "  DSD Format:       $DSD_FORMAT"
 echo "  Sample Format:    ${SAMPLE_FORMAT}-bit"
-echo "  WAV Header:       $WAV_HEADER"
 echo "  Pause on Start:   $PAUSE_ON_START"
 echo ""
 echo "Command:"

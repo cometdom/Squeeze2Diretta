@@ -248,7 +248,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a full list of changes.
 
 ### Upgrading from v2.0.1 to v2.0.2
 
-v2.0.2 adds rebuffering for cleaner recovery during network stalls. No squeezelite rebuild needed.
+v2.0.2 fixes a crash with very high sample rate files (705.6kHz/768kHz) caused by false SQFH header detection in audio data. It also always enables WAV/AIFF header parsing for reliable format detection (the `-W` option and `WAV_HEADER` config setting have been removed). No squeezelite rebuild needed.
 
 ```bash
 # 1. Stop the service
@@ -264,7 +264,7 @@ rm -rf build/
 sudo systemctl start squeeze2diretta
 ```
 
-> **Note:** Your existing configuration (`squeeze2diretta.conf`) and squeezelite binary are preserved.
+> **Note:** Your existing configuration (`squeeze2diretta.conf`) and squeezelite binary are preserved. If you had `WAV_HEADER=yes` in your config, you can remove that line — it is now always enabled and the setting is ignored.
 
 See [CHANGELOG.md](CHANGELOG.md) for full details.
 
@@ -446,7 +446,6 @@ Found 2 Diretta target(s):
 --verbose, -v           Enable verbose debug output
 --quiet, -q             Quiet mode (warnings and errors only)
 -a <bits>               PCM output bit depth: 16, 24, or 32 (default: 32)
--W                      Enable WAV/AIFF header parsing in Squeezelite
 ```
 
 ### Squeezelite Options (passed through)
@@ -481,7 +480,6 @@ sudo nano /opt/squeeze2diretta/squeeze2diretta.conf
 | `DSD_FORMAT` | DSD output format (see below) | `u32be` |
 | `SAMPLE_FORMAT` | PCM bit depth: 16, 24, or 32 (see below) | `32` |
 | `PAUSE_ON_START` | Pause playback when service starts (prevents auto-resume) | `no` |
-| `WAV_HEADER` | Read format from WAV/AIFF headers instead of server parameters | `no` |
 | `VERBOSE` | Set to `-v` for debug output | (empty) |
 
 ### DSD Format: LMS vs Roon
@@ -589,4 +587,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 **Enjoy native DSD and hi-res PCM streaming from your LMS library!**
 
-*Last updated: 2026-02-19 (v2.0.2)*
+*Last updated: 2026-02-22 (v2.0.2)*

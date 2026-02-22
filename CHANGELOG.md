@@ -5,7 +5,7 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.2] - 2026-02-19
+## [2.0.2] - 2026-02-22
 
 ### Added
 
@@ -22,6 +22,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Now enters rebuffering mode on underrun: holds silence until the buffer refills to 20%
 - Result: clean silence gap followed by smooth playback resumption instead of stuttering
 - Logged as `Buffer underrun — entering rebuffering mode` / `Rebuffering complete — resuming playback`
+
+### Fixed
+
+**False SQFH Header Detection in Hi-Res Audio Data:**
+- At very high sample rates (e.g., 705.6kHz/768kHz), the 4-byte "SQFH" magic could randomly
+  appear in audio data, causing the wrapper to misinterpret audio as a format header
+- This led to a crash or stream desynchronization after ~30-40 seconds of playback
+- Fix: triple protection against false positives:
+  - Extended signature scan from 4 bytes to 5 bytes (`"SQFH" + version=1`), reducing
+    false positive probability from ~1 in 4 GB to ~1 in 1 TB of audio data
+  - New `isValidHeader()` validates all header fields (version, channels, bit_depth,
+    dsd_format, sample_rate) against known valid ranges
+  - Graceful recovery: if a false positive passes the 5-byte scan but fails validation,
+    the wrapper logs a warning and resumes streaming with the previous valid format
+
+### Changed
+
+**WAV/AIFF Header Parsing Always Enabled:**
+- The `-W` option and `WAV_HEADER` config setting have been removed
+- Squeezelite now always runs with `-W` (WAV/AIFF header parsing) enabled
+- This ensures reliable format detection regardless of server configuration
+- Without `-W`, LMS could send incorrect format parameters for certain files
+  (e.g., reporting 44100Hz for a 705.6kHz WAV file), causing wrong-speed playback
+- The `-W` flag has no downside: it falls back to server parameters for raw PCM streams
 
 ---
 
