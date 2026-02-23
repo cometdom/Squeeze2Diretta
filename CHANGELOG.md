@@ -5,7 +5,7 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.2] - 2026-02-22
+## [2.0.2] - Unreleased
 
 ### Added
 
@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the ring buffer empties during a network stall, small data bursts were immediately consumed, creating a rapid silence/audio alternation ("CD skip" effect)
 - Now enters rebuffering mode on underrun: holds silence until the buffer refills to 20%
 - Result: clean silence gap followed by smooth playback resumption instead of stuttering
-- Logged as `Buffer underrun — entering rebuffering mode` / `Rebuffering complete — resuming playback`
+- Rebuffering events logged at WARN level, visible in all builds (including `NOLOG=1` production builds and `--quiet` mode)
 
 ### Fixed
 
