@@ -200,6 +200,8 @@ namespace DirettaBuffer {
     constexpr size_t PREFILL_MS_UNCOMPRESSED = 100;  // WAV, AIFF
     constexpr size_t PREFILL_MS_DSD = 150;           // DSD (fixed)
 
+    constexpr float REBUFFER_THRESHOLD_PCT = 0.20f;      // Resume playback after 20% buffer refill
+
     constexpr unsigned int DAC_STABILIZATION_MS = 100;
     constexpr unsigned int ONLINE_WAIT_MS = 2000;
     constexpr unsigned int FORMAT_SWITCH_DELAY_MS = 800;
@@ -623,6 +625,7 @@ private:
     std::atomic<int> m_streamCount{0};
     std::atomic<int> m_pushCount{0};
     std::atomic<uint32_t> m_underrunCount{0};
+    std::atomic<bool> m_rebuffering{false};              // Rebuffering after sustained underrun
 };
 
 #endif // DIRETTA_SYNC_H

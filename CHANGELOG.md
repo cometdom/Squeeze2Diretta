@@ -5,6 +5,50 @@ All notable changes to squeeze2diretta will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-02-24
+
+### Added
+
+**Idle Target Release (coexistence with DirettaRendererUPnP):**
+- When both services run simultaneously, squeeze2diretta now releases the Diretta Target after 5 seconds of silence
+- Previously, the SDK connection was held indefinitely, preventing DirettaRendererUPnP from connecting
+- Detects silence (all-zeros) in the squeezelite output stream to distinguish idle from active playback
+- SDK connection deferred at startup — target remains available until the first track actually plays
+- Target is automatically re-acquired when LMS starts the next track (~500ms overhead on first track after idle)
+- Logged as `Silence for 5s — releasing Diretta target for other sources`
+
+**Rebuffering on Underrun (streaming resilience):**
+- When the ring buffer empties during a network stall, small data bursts were immediately consumed, creating a rapid silence/audio alternation ("CD skip" effect)
+- Now enters rebuffering mode on underrun: holds silence until the buffer refills to 20%
+- Result: clean silence gap followed by smooth playback resumption instead of stuttering
+- Rebuffering events logged at WARN level, visible in all builds (including `NOLOG=1` production builds and `--quiet` mode)
+
+### Fixed
+
+**False SQFH Header Detection in Hi-Res Audio Data:**
+- At very high sample rates (e.g., 705.6kHz/768kHz), the 4-byte "SQFH" magic could randomly
+  appear in audio data, causing the wrapper to misinterpret audio as a format header
+- This led to a crash or stream desynchronization after ~30-40 seconds of playback
+- Fix: triple protection against false positives:
+  - Extended signature scan from 4 bytes to 5 bytes (`"SQFH" + version=1`), reducing
+    false positive probability from ~1 in 4 GB to ~1 in 1 TB of audio data
+  - New `isValidHeader()` validates all header fields (version, channels, bit_depth,
+    dsd_format, sample_rate) against known valid ranges
+  - Graceful recovery: if a false positive passes the 5-byte scan but fails validation,
+    the wrapper logs a warning and resumes streaming with the previous valid format
+
+### Changed
+
+**WAV/AIFF Header Parsing Always Enabled:**
+- The `-W` option and `WAV_HEADER` config setting have been removed
+- Squeezelite now always runs with `-W` (WAV/AIFF header parsing) enabled
+- This ensures reliable format detection regardless of server configuration
+- Without `-W`, LMS could send incorrect format parameters for certain files
+  (e.g., reporting 44100Hz for a 705.6kHz WAV file), causing wrong-speed playback
+- The `-W` flag has no downside: it falls back to server parameters for raw PCM streams
+
+---
+
 ## [2.0.1] - 2026-02-17
 
 ### Added
@@ -15,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-v` continues to work as before (DEBUG level)
 - Default level (INFO) produces the same output as v2.0.0
 - All source files migrated from per-file `DEBUG_LOG`/`DIRETTA_LOG` macros to unified log levels
-- In `NOLOG` builds, all logging macros compile to no-ops
+- `NOLOG` builds now only disable SDK internal logging (`DIRETTA_LOG`); application `LOG_*` macros remain active with runtime level control, so `-v` and `-q` work correctly in production builds
 
 **Runtime Statistics via SIGUSR1:**
 - Send `kill -USR1 <pid>` to dump live statistics to stdout
@@ -264,6 +308,7 @@ in the new configuration file.
 
 ---
 
+[2.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.2
 [2.0.1]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.1
 [2.0.0]: https://github.com/cometdom/squeeze2diretta/releases/tag/v2.0.0
 [1.0.2]: https://github.com/cometdom/squeeze2diretta/releases/tag/v1.0.2

@@ -121,13 +121,13 @@ bool DirettaSync::enable(const DirettaConfig& config) {
 
     m_calculator = std::make_unique<DirettaCycleCalculator>(m_effectiveMTU);
 
-    if (!openSyncConnection()) {
-        DIRETTA_LOG("Failed to open sync connection");
-        return false;
-    }
+    // Note: SDK connection is NOT opened here — it will be opened lazily
+    // by open() on the first track. This allows the Diretta Target to remain
+    // available for other sources (e.g., DirettaRendererUPnP) until playback
+    // actually starts.
 
     m_enabled = true;
-    DIRETTA_LOG("Enabled, MTU=" << m_effectiveMTU);
+    std::cout << "[DirettaSync] Enabled, MTU=" << m_effectiveMTU << " (SDK deferred until first track)" << std::endl;
     return true;
 }
 
@@ -147,8 +147,10 @@ void DirettaSync::disable() {
 
     if (m_enabled) {
         shutdownWorker();
-        DIRETTA::Sync::close();
-        m_sdkOpen = false;
+        if (m_sdkOpen) {
+            DIRETTA::Sync::close();
+            m_sdkOpen = false;
+        }
         m_calculator.reset();
         m_enabled = false;
     }
@@ -442,6 +444,7 @@ bool DirettaSync::open(const AudioFormat& format) {
             // to send additional silence after prefill completes.
             m_ringBuffer.clear();
             m_prefillComplete = false;
+            m_rebuffering.store(false, std::memory_order_relaxed);
             // m_postOnlineDelayDone stays true - DAC already stable
             m_stabilizationCount = 0;
             m_stopRequested = false;
@@ -866,6 +869,7 @@ void DirettaSync::close() {
     m_open = false;
     m_playing = false;
     m_paused = false;
+    m_rebuffering.store(false, std::memory_order_relaxed);
 
     DIRETTA_LOG("Close() done");
 }
@@ -976,6 +980,7 @@ void DirettaSync::fullReset() {
         m_stabilizationCount = 0;
         m_streamCount = 0;
         m_pushCount = 0;
+        m_rebuffering.store(false, std::memory_order_relaxed);
         m_isDsdMode.store(false, std::memory_order_release);
         m_needDsdBitReversal.store(false, std::memory_order_release);
         m_needDsdByteSwap.store(false, std::memory_order_release);
@@ -1675,9 +1680,30 @@ bool DirettaSync::getNewStream(diretta_stream& baseStream) {
                           << fillPct << "%) " << (currentIsDsd ? "[DSD]" : "[PCM]"));
     }
 
-    // Underrun - count silently, log at session end
+    // Rebuffering: hold silence until buffer recovers to threshold
+    // Prevents stuttering ("CD skip" effect) when small data bursts trickle in
+    // during a network stall — accumulates data for a clean resumption
+    if (m_rebuffering.load(std::memory_order_acquire)) {
+        size_t threshold = static_cast<size_t>(currentRingSize * DirettaBuffer::REBUFFER_THRESHOLD_PCT);
+        if (avail >= threshold) {
+            m_rebuffering.store(false, std::memory_order_release);
+            LOG_WARN("[DirettaSync] Rebuffering complete — resuming playback (avail="
+                     << avail << ", threshold=" << threshold << ")");
+            // Fall through to normal pop below
+        } else {
+            std::memset(dest, currentSilenceByte, currentBytesPerBuffer);
+            m_workerActive = false;
+            return true;
+        }
+    }
+
+    // Underrun detection — enter rebuffering mode for clean silence
     if (avail < static_cast<size_t>(currentBytesPerBuffer)) {
         m_underrunCount.fetch_add(1, std::memory_order_relaxed);
+        if (!m_rebuffering.load(std::memory_order_relaxed)) {
+            m_rebuffering.store(true, std::memory_order_release);
+            LOG_WARN("[DirettaSync] Buffer underrun — entering rebuffering mode (avail=" << avail << ")");
+        }
         std::memset(dest, currentSilenceByte, currentBytesPerBuffer);
         m_workerActive = false;
         return true;
